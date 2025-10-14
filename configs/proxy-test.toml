@@ -1,0 +1,352 @@
+local_http_port= "8080"
+local_docker_port= "2375"
+
+# SSH Hop Configs
+[[ssh_hops]]
+order=1
+user="thinpark"
+host="106.14.195.98"
+port=22
+authType="privateKeyWithPassphrase"
+privateKeyPath=".secrets/id_ed25519"
+passphrase="maancoffee"
+alias="Park跳板"
+timeoutSec=10
+
+[[ssh_hops]]
+order=2
+user="wcladmin"
+host="10.153.8.4"
+port=22
+authType="privateKeyWithPassphrase"
+privateKeyPath=".secrets/id_ed25519"
+passphrase="maancoffee"
+alias="服务跳板"
+timeoutSec=5
+
+
+[[ssh_hops]]
+order=3
+user="wcladmin"
+host="10.153.40.3"
+port=22
+authType="privateKeyWithPassphrase"
+privateKeyPath=".secrets/id_ed25519"
+passphrase="maancoffee"
+alias="内网跳板"
+timeoutSec=5
+
+
+
+[[services]]
+alias="Adobe Proxy"
+host="adobe-proxy.test.service.alihhc.hilton.com"
+port="80"
+subdomain="adobe-proxy"
+
+[[services]]
+alias="Akamai Assets"
+host="akamai-assets.test.service.alihhc.hilton.com"
+port="80"
+subdomain="akamai-assets"
+
+[[services]]
+alias="App Middleware"
+host="app-middleware-alb.test.service.alihhc.hilton.com"
+port="80"
+subdomain="app-middleware"
+
+[[services]]
+alias="CN Analytics"
+host="cn-analytics.test.service.alihhc.hilton.com"
+port="80"
+subdomain="cn-analytics"
+
+[[services]]
+alias="Apple Wallet"
+host="cn-apple-wallet.test.service.alihhc.hilton.com"
+port="80"
+subdomain="apple-wallet"
+
+
+[[services]]
+alias="Auth"
+host="cn-auth.test.service.alihhc.hilton.com"
+port="80"
+subdomain="auth"
+
+[[services]]
+alias="Auth H5"
+host="cn-auth-h5.test.service.alihhc.hilton.com"
+port="80"
+subdomain="auth-h5"
+
+[[services]]
+alias="Card Tokens"
+host="cn-card-tokens.test.service.alihhc.hilton.com"
+port="80"
+subdomain="card-tokens"
+
+[[services]]
+alias="Didi"
+host="cn-didi.test.service.alihhc.hilton.com"
+port="80"
+subdomain="didi"
+
+[[services]]
+alias="DK Edge"
+host="cn-dk-edge.test.service.alihhc.hilton.com"
+port="80"
+subdomain="dk-edge"
+
+[[services]]
+alias="E-fapiao GQL"
+host="cn-e-fapiao-gql.test.service.alihhc.hilton.com"
+port="80"
+subdomain="e-fapiao-gql"
+
+[[services]]
+alias="Federation Gateway"
+host="cn-federation-gateway.test.service.alihhc.hilton.com"
+port="80"
+subdomain="federation-gateway"
+
+[[services]]
+alias="Guests"
+host="cn-guests.test.service.alihhc.hilton.com"
+port="80"
+subdomain="guests"
+
+[[services]]
+alias="Lookups GQL"
+host="cn-lookups-gql.test.service.alihhc.hilton.com"
+port="80"
+subdomain="lookups-gql"
+
+[[services]]
+alias="Notifications"
+host="cn-notifications.test.service.alihhc.hilton.com"
+port="80"
+subdomain="notifications"
+
+[[services]]
+alias="Shortlink"
+host="cn-shortlink.test.service.alihhc.hilton.com"
+port="80"
+subdomain="shortlink"
+
+[[services]]
+alias="SMS"
+host="cn-sms.test.service.alihhc.hilton.com"
+port="80"
+subdomain="sms"
+
+[[services]]
+alias="Translations"
+host="cn-translations.test.service.alihhc.hilton.com"
+port="80"
+subdomain="translations"
+
+[[services]]
+alias="Control Panel UI"
+host="control-panel.test.service.alihhc.hilton.com"
+port="80"
+subdomain="control-panel"
+
+[[services]]
+alias="Control Panel"
+host="control-panel-api.test.service.alihhc.hilton.com"
+port="80"
+subdomain="control-panel-api"
+
+[[services]]
+alias="DK Share H5"
+host="dk-share-h5.test.service.alihhc.hilton.com"
+port="80"
+subdomain="dk-share-h5"
+
+[[services]]
+alias="Douyin Transition"
+host="douyin-transition.test.service.alihhc.hilton.com"
+port="80"
+subdomain="douyin-transition"
+
+[[services]]
+alias="DX Auth"
+host="dx-auth-api.test.service.alihhc.hilton.com"
+port="80"
+subdomain="dx-auth-api"
+
+[[services]]
+alias="DX China Core ALB"
+host="dx-china-core-alb.test.service.alihhc.hilton.com"
+port="80"
+subdomain="dx-china-core-alb"
+
+[[services]]
+alias="DX China Core IALB"
+host="dx-china-core-internal-alb.test.service.alihhc.hilton.com"
+port="80"
+subdomain="dx-china-core-internal-alb"
+
+[[services]]
+alias="DX Feature Toggles"
+host="dx-feature-toggles-api.test.service.alihhc.hilton.com"
+port="80"
+subdomain="dx-feature-toggles-api"
+
+[[services]]
+alias="DX Guests V2"
+host="dx-guests-v2.test.service.alihhc.hilton.com"
+port="80"
+subdomain="dx-guests-v2"
+
+[[services]]
+alias="DX Hotels V2"
+host="dx-hotels-v2.test.service.alihhc.hilton.com"
+port="80"
+subdomain="dx-hotels-v2"
+
+[[services]]
+alias="DX Lookups V2"
+host="dx-lookups-v2.test.service.alihhc.hilton.com"
+port="80"
+subdomain="dx-lookups-v2"
+
+[[services]]
+alias="DX Offers V2"
+host="dx-offers-v2.test.service.alihhc.hilton.com"
+port="80"
+subdomain="dx-offers-v2"
+
+[[services]]
+alias="DX Reservations V2"
+host="dx-reservations-v2.test.service.alihhc.hilton.com"
+port="80"
+subdomain="dx-reservations-v2"
+
+[[services]]
+alias="DX Shop V2"
+host="dx-shop-v2.test.service.alihhc.hilton.com"
+port="80"
+subdomain="dx-shop-v2"
+
+[[services]]
+alias="DX Stays V2"
+host="dx-stays-v2.test.service.alihhc.hilton.com"
+port="80"
+subdomain="dx-stays-v2"
+
+[[services]]
+alias="Extcust Proxy"
+host="extcust-proxy.test.service.alihhc.hilton.com"
+port="80"
+subdomain="extcust-proxy"
+
+[[services]]
+alias="Hilton Message API"
+host="hilton-message-api.test.service.alihhc.hilton.com"
+port="80"
+subdomain="hilton-message-api"
+
+[[services]]
+alias="Hilton OTA"
+host="hilton-ota.test.service.alihhc.hilton.com"
+port="80"
+subdomain="hilton-ota"
+
+[[services]]
+alias="Hilton Reports"
+host="hilton-reports.test.service.alihhc.hilton.com"
+port="80"
+subdomain="hilton-reports"
+
+[[services]]
+alias="Hilton Wechat"
+host="hilton-wechat.test.service.alihhc.hilton.com"
+port="80"
+subdomain="hilton-wechat"
+
+[[services]]
+alias="Hilton Wechat DL"
+host="hilton-wechat-deeplink.test.service.alihhc.hilton.com"
+port="80"
+subdomain="hilton-wechat-deeplink"
+
+[[services]]
+alias="HMS Proxy ALB"
+host="hms-proxy-alb.test.service.alihhc.hilton.com"
+port="80"
+subdomain="hms-proxy-alb"
+
+[[services]]
+alias="Keycloak"
+host="keycloak.test.service.alihhc.hilton.com"
+port="80"
+subdomain="keycloak"
+
+[[services]]
+alias="MLA"
+host="mla.test.service.alihhc.hilton.com"
+port="80"
+subdomain="mla"
+
+[[services]]
+alias="MLA Processor"
+host="mla-processor.test.service.alihhc.hilton.com"
+port="80"
+subdomain="mla-processor"
+
+[[services]]
+alias="MLA Sync"
+host="mla-sync.test.service.alihhc.hilton.com"
+port="80"
+subdomain="mla-sync"
+
+[[services]]
+alias="MP Assets"
+host="mp-assets.test.service.alihhc.hilton.com"
+port="80"
+subdomain="mp-assets"
+
+[[services]]
+alias="Payments V3"
+host="payments-v2.test.service.alihhc.hilton.com"
+port="80"
+subdomain="paymentsv3"
+
+[[services]]
+alias="Pre Translate"
+host="pre-translate.test.service.alihhc.hilton.com"
+port="80"
+subdomain="pretranslate"
+
+[[services]]
+alias="Push Notification"
+host="push-notification.test.service.alihhc.hilton.com"
+port="80"
+subdomain="push-notification"
+
+[[services]]
+alias="Social Login UI"
+host="social-login-ui.test.service.alihhc.hilton.com"
+port="80"
+subdomain="social-login-ui"
+
+[[services]]
+alias="Starbucks"
+host="starbucks.test.service.alihhc.hilton.com"
+port="80"
+subdomain="starbucks"
+
+[[services]]
+alias="TokenizeJS"
+host="tokenizejs.test.service.alihhc.hilton.com"
+port="80"
+subdomain="tokenizejs"
+
+[[services]]
+alias="WX Share"
+host="wx-share.test.service.alihhc.hilton.com"
+port="80"
+subdomain="wx-share"
