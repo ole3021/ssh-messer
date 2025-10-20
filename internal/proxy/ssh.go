@@ -32,7 +32,7 @@ func CreateSSHHopsClient(sshHopsConfigs []loaders.TomlConfigSSH) (*ssh.Client, e
 			aliasName = sshAddress
 		}
 
-		sshClientConfig, err := transformSSHClientConfig(sshHopConfig)
+		sshClientConfig, err := TransformSSHClientConfig(sshHopConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -69,8 +69,133 @@ func CreateSSHHopsClient(sshHopsConfigs []loaders.TomlConfigSSH) (*ssh.Client, e
 	return client, nil
 }
 
+type SSHClientResultChan struct {
+	Client *ssh.Client
+	Error  error
+}
+
+type SSHProcessChan struct {
+	TotalHopsCount     int
+	CompletedHopsCount int
+	Message            string
+	Error              error
+}
+
+func AsyncCreateSSHHopsClient(sshHopsConfigs []loaders.TomlConfigSSH, sshClientChan chan SSHClientResultChan, sshProcessChan *chan SSHProcessChan) {
+	var client *ssh.Client
+
+	log.Printf("🦘 开始跳转 SSH: [%v]", sshHopsConfigs)
+
+	// 对sshHopsConfigs 按照order 从小到大进行排序
+	sort.Slice(sshHopsConfigs, func(i, j int) bool {
+		return *sshHopsConfigs[i].Order < *sshHopsConfigs[j].Order
+	})
+
+	for i, sshHopConfig := range sshHopsConfigs {
+		// 正确的写法
+		port := 22
+		if sshHopConfig.Port != nil && *sshHopConfig.Port != 0 {
+			port = *sshHopConfig.Port
+		}
+		sshAddress := *sshHopConfig.Host + ":" + strconv.Itoa(port)
+		var aliasName string
+		if sshHopConfig.Alias != nil {
+			aliasName = *sshHopConfig.Alias
+		} else {
+			aliasName = sshAddress
+		}
+
+		sshClientConfig, err := TransformSSHClientConfig(sshHopConfig)
+		if err != nil {
+			*sshProcessChan <- SSHProcessChan{
+				TotalHopsCount:     len(sshHopsConfigs),
+				CompletedHopsCount: i,
+				Message:            fmt.Sprintf("SSH配置:[%s] 转换失败: %v", aliasName, err),
+				Error:              err,
+			}
+			sshClientChan <- SSHClientResultChan{
+				Client: nil,
+				Error:  err,
+			}
+			return
+		}
+
+		*sshProcessChan <- SSHProcessChan{
+			TotalHopsCount:     len(sshHopsConfigs),
+			CompletedHopsCount: i,
+			Message:            fmt.Sprintf("🦘 [%v/%v] 正在跳转 SSH: [%s]", i+1, len(sshHopsConfigs), aliasName),
+			Error:              nil,
+		}
+
+		if i == 0 {
+			// 第一跳：直接连接
+			client, err = ssh.Dial("tcp", sshAddress, sshClientConfig)
+			if err != nil {
+				*sshProcessChan <- SSHProcessChan{
+					TotalHopsCount:     len(sshHopsConfigs),
+					CompletedHopsCount: i,
+					Message:            fmt.Sprintf("SSH连接 [%s] 失败: %v", aliasName, err),
+					Error:              err,
+				}
+				sshClientChan <- SSHClientResultChan{
+					Client: nil,
+					Error:  err,
+				}
+				return
+			}
+		} else {
+			// 后续跳：通过隧道连接
+			conn, err := client.Dial("tcp", sshAddress)
+			if err != nil {
+				client.Close()
+				*sshProcessChan <- SSHProcessChan{
+					TotalHopsCount:     len(sshHopsConfigs),
+					CompletedHopsCount: i,
+					Message:            fmt.Sprintf("SSH 隧道连接 [%s] 失败: %v", aliasName, err),
+					Error:              err,
+				}
+				sshClientChan <- SSHClientResultChan{
+					Client: nil,
+					Error:  err,
+				}
+				return
+			}
+
+			nconn, chans, reqs, err := ssh.NewClientConn(conn, sshAddress, sshClientConfig)
+			if err != nil {
+				conn.Close()
+				client.Close()
+				*sshProcessChan <- SSHProcessChan{
+					TotalHopsCount:     len(sshHopsConfigs),
+					CompletedHopsCount: i,
+					Message:            fmt.Sprintf("SSH 隧道连接 [%s] 失败: %v", aliasName, err),
+					Error:              err,
+				}
+				sshClientChan <- SSHClientResultChan{
+					Client: nil,
+					Error:  err,
+				}
+				return
+			}
+
+			client = ssh.NewClient(nconn, chans, reqs)
+		}
+
+	}
+	*sshProcessChan <- SSHProcessChan{
+		TotalHopsCount:     len(sshHopsConfigs),
+		CompletedHopsCount: len(sshHopsConfigs),
+		Message:            "",
+		Error:              nil,
+	}
+	sshClientChan <- SSHClientResultChan{
+		Client: client,
+		Error:  nil,
+	}
+}
+
 // Convert sshHopConfig to sshClientConfig
-func transformSSHClientConfig(sshHopConfig loaders.TomlConfigSSH) (*ssh.ClientConfig, error) {
+func TransformSSHClientConfig(sshHopConfig loaders.TomlConfigSSH) (*ssh.ClientConfig, error) {
 	var clientConfig = &ssh.ClientConfig{
 		User: *sshHopConfig.User,
 	}
