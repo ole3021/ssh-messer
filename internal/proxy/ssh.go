@@ -84,7 +84,20 @@ type SSHProcessChan struct {
 func AsyncCreateSSHHopsClient(sshHopsConfigs []loaders.TomlConfigSSH, sshClientChan chan SSHClientResultChan, sshProcessChan *chan SSHProcessChan) {
 	var client *ssh.Client
 
-	log.Printf("🦘 开始跳转 SSH: [%v]", sshHopsConfigs)
+	// 检查是否有 SSH 跳转配置
+	if len(sshHopsConfigs) == 0 {
+		*sshProcessChan <- SSHProcessChan{
+			TotalHopsCount:     0,
+			CompletedHopsCount: 0,
+			Message:            "没有 SSH 跳转配置",
+			Error:              nil,
+		}
+		sshClientChan <- SSHClientResultChan{
+			Client: nil,
+			Error:  nil,
+		}
+		return
+	}
 
 	// 对sshHopsConfigs 按照order 从小到大进行排序
 	sort.Slice(sshHopsConfigs, func(i, j int) bool {
@@ -182,10 +195,11 @@ func AsyncCreateSSHHopsClient(sshHopsConfigs []loaders.TomlConfigSSH, sshClientC
 		}
 
 	}
+
 	*sshProcessChan <- SSHProcessChan{
 		TotalHopsCount:     len(sshHopsConfigs),
 		CompletedHopsCount: len(sshHopsConfigs),
-		Message:            "",
+		Message:            "SSH 连接建立成功",
 		Error:              nil,
 	}
 	sshClientChan <- SSHClientResultChan{
@@ -208,14 +222,12 @@ func TransformSSHClientConfig(sshHopConfig loaders.TomlConfigSSH) (*ssh.ClientCo
 	case "privateKeyWithPassphrase":
 		privateKey, err := os.ReadFile(*sshHopConfig.PrivateKeyPath)
 		if err != nil {
-			log.Fatalf("!!! Failed to read private key file: %v", err)
-			return nil, err
+			return nil, fmt.Errorf("!!! Failed to read private key file: %v", err)
 		}
 
 		signer, err := ssh.ParsePrivateKeyWithPassphrase(privateKey, []byte(*sshHopConfig.Passphrase))
 		if err != nil {
-			log.Fatalf("Failed to parse private key: %v", err)
-			return nil, err
+			return nil, fmt.Errorf("!!! Failed to parse private key: %v", err)
 		}
 		clientConfig.Auth = []ssh.AuthMethod{
 			ssh.PublicKeys(signer),
