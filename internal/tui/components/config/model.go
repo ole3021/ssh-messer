@@ -1,9 +1,10 @@
 package config
 
 import (
+	"sort"
 	"ssh-messer/internal/tui/components"
 	"ssh-messer/internal/tui/messages"
-	"ssh-messer/internal/tui/models"
+	"ssh-messer/internal/tui/types"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -19,17 +20,22 @@ const (
 
 // ConfigComponent Config 组件
 type ConfigComponent struct {
-	State      *models.ConfigViewState
-	UI         *models.UIState
-	RenderMode RenderMode
+	// State      *models.ConfigViewState
+	UIState     *types.UIState
+	AppState    *types.AppState
+	RenderMode  RenderMode
+	ConfigNames []string
+	Cursor      int
 }
 
 // NewConfigComponent 创建新的 Config 组件
-func NewConfigComponent(uiState *models.UIState, renderMode RenderMode) *ConfigComponent {
+func NewConfigComponent(uiState *types.UIState, appState *types.AppState, renderMode RenderMode) *ConfigComponent {
 	return &ConfigComponent{
-		State:      models.NewConfigViewState(),
-		UI:         uiState,
-		RenderMode: renderMode,
+		UIState:     uiState,
+		AppState:    appState,
+		RenderMode:  renderMode,
+		ConfigNames: getConfigNames(appState),
+		Cursor:      0,
 	}
 }
 
@@ -39,7 +45,8 @@ func (c *ConfigComponent) Update(msg tea.Msg) (components.Component, tea.Cmd) {
 	case tea.KeyMsg:
 		return c.handleKeyPress(msg)
 	case messages.LoadConfigs:
-		return c.handleLoadConfigs(msg)
+		c.RefreshFromAppState()
+		return c, nil
 	default:
 		return c, nil
 	}
@@ -49,54 +56,48 @@ func (c *ConfigComponent) Update(msg tea.Msg) (components.Component, tea.Cmd) {
 func (c *ConfigComponent) View() string {
 	switch c.RenderMode {
 	case RenderModePopup:
-		return renderPopup(c.State, c.UI)
-	case RenderModeFullscreen:
-		return renderFullscreen(c.State, c.UI)
+		return renderPopup(c)
 	case RenderModeInline:
-		return renderInline(c.State, c.UI)
+		return renderInline(c)
 	default:
-		return renderPopup(c.State, c.UI)
+		return renderPopup(c)
 	}
+}
+
+func getConfigNames(appState *types.AppState) []string {
+	configs := appState.GetConfigs()
+	var configNames []string
+	for name := range configs {
+		configNames = append(configNames, name)
+	}
+	sort.Strings(configNames) // 确保顺序一致
+	return configNames
 }
 
 // handleKeyPress 处理键盘输入
 func (c *ConfigComponent) handleKeyPress(msg tea.KeyMsg) (components.Component, tea.Cmd) {
 	switch msg.String() {
 	case "up", "k":
-		if c.State.Cursor > 0 {
-			c.State.Cursor--
+		if c.Cursor > 0 {
+			c.Cursor--
 		}
 	case "down", "j":
-		if c.State.Cursor < len(c.State.ConfigNames)-1 {
-			c.State.Cursor++
+		if c.Cursor < len(c.ConfigNames)-1 {
+			c.Cursor++
 		}
 	case "enter":
-		if len(c.State.ConfigNames) > 0 {
-			selectedConfig := c.State.ConfigNames[c.State.Cursor]
-			c.State.SelectedName = selectedConfig
+		if len(c.ConfigNames) > 0 {
+			selectedConfigName := c.ConfigNames[c.Cursor]
 			// 返回选择消息
 			return c, func() tea.Msg {
-				return messages.ConfigSelected{ConfigName: selectedConfig}
+				return messages.ConfigSelected{ConfigName: selectedConfigName}
 			}
-		}
-	case "esc", "ctrl+c", "q":
-		// 返回取消消息
-		return c, func() tea.Msg {
-			return messages.ConfigCancelled{}
 		}
 	}
 	return c, nil
 }
 
-// handleLoadConfigs 处理配置加载消息
-func (c *ConfigComponent) handleLoadConfigs(msg messages.LoadConfigs) (components.Component, tea.Cmd) {
-	// 更新配置列表
-	var configNames []string
-	for name := range msg.Configs {
-		configNames = append(configNames, name)
-	}
-	c.State.ConfigNames = configNames
-	c.State.Cursor = 0
-
-	return c, nil
+func (c *ConfigComponent) RefreshFromAppState() {
+	c.ConfigNames = getConfigNames(c.AppState)
+	c.Cursor = 0
 }

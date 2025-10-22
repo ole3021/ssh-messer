@@ -1,58 +1,52 @@
 package sshproxy
 
 import (
+	"fmt"
 	"ssh-messer/internal/proxy"
 	"ssh-messer/internal/tui/messages"
-	"ssh-messer/internal/tui/models"
+	"ssh-messer/internal/tui/types"
 	"ssh-messer/internal/tui/views"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// SSHProxyView SSH 代理视图
-// 负责处理 SSH 连接、代理状态显示和用户交互
 type SSHProxyView struct {
 	views.BaseView
-	State *models.SSHProxyViewState
-	UI    *models.UIState
-	App   *models.AppState
+	UIState             *types.UIState
+	AppState            *types.AppState
+	SSHClientResultChan chan proxy.SSHClientResultChan
+	SSHProcessChan      chan proxy.SSHProcessChan
+	ProxyRequestChan    chan proxy.ProxyRequestResult
 }
 
-// NewSSHProxyView 创建新的 SSH 代理视图
-func NewSSHProxyView(uiState *models.UIState, appState *models.AppState) *SSHProxyView {
+func NewSSHProxyView(uiState types.UIState, appState types.AppState) *SSHProxyView {
 	return &SSHProxyView{
-		BaseView: views.BaseView{Type: models.SSHProxyView},
-		State:    models.NewSSHProxyViewState(),
-		UI:       uiState,
-		App:      appState,
+		BaseView:            views.BaseView{Type: types.SSHProxyView},
+		UIState:             &uiState,
+		AppState:            &appState,
+		SSHClientResultChan: make(chan proxy.SSHClientResultChan),
+		SSHProcessChan:      make(chan proxy.SSHProcessChan),
+		ProxyRequestChan:    make(chan proxy.ProxyRequestResult),
 	}
 }
 
-// Init 初始化 SSH 代理视图
 func (v *SSHProxyView) Init() tea.Cmd {
-	// 创建 channel（修复全局 channel 问题）
-	v.State.SSHClientChan = make(chan proxy.SSHClientResultChan)
-	v.State.SSHProcessChan = make(chan proxy.SSHProcessChan)
+	configs := v.AppState.GetConfigs()
+	currentConfigName := v.AppState.GetCurrentConfigName()
 
-	// 初始化当前信息（通过 SSH 信息状态管理）
-
-	// 启动 SSH 连接
-	configs := v.App.GetConfigs()
-	currentConfig := v.App.GetCurrentConfig()
-
-	if config, exists := configs[currentConfig]; exists {
-		// 启动异步连接
-		go proxy.AsyncCreateSSHHopsClient(config.SSHHops, v.State.SSHClientChan, &v.State.SSHProcessChan)
+	if config, exists := configs[currentConfigName]; exists {
+		go proxy.AsyncCreateSSHHopsClient(config.SSHHops, v.SSHClientResultChan, &v.SSHProcessChan)
 	}
 
 	return tea.Batch(
 		tickSSHConnectionAnimation(),
-		listenToSSHChannels(v.State.SSHClientChan, v.State.SSHProcessChan),
+		waitForSSHClientResult(v.SSHClientResultChan),
+		waitForSSHProcessResult(v.SSHProcessChan),
+		waitForProxyRequestResult(v.ProxyRequestChan),
 	)
 }
 
-// Update 处理消息并更新视图状态
 func (v *SSHProxyView) Update(msg tea.Msg) (views.View, tea.Cmd) {
 	switch msg := msg.(type) {
 	case messages.SSHConnectionTick:
@@ -61,132 +55,166 @@ func (v *SSHProxyView) Update(msg tea.Msg) (views.View, tea.Cmd) {
 		return v.handleSSHClientResult(msg)
 	case messages.SSHProcessResult:
 		return v.handleSSHProcessResult(msg)
-	case tea.KeyMsg:
-		return v.handleKeyPress(msg)
+	case messages.ProxyRequestResult:
+		return v.handleProxyRequestResult(msg)
 	default:
 		return v, nil
 	}
 }
 
-// View 渲染 SSH 代理视图
 func (v *SSHProxyView) View() string {
-	return RenderSSHProxyView(v.State, v.UI, v.App)
+	return RenderSSHProxyView(v)
 }
 
-// Cleanup 清理资源
 func (v *SSHProxyView) Cleanup() tea.Cmd {
-	if v.State.SSHClientChan != nil {
-		close(v.State.SSHClientChan)
-		v.State.SSHClientChan = nil
+	if v.SSHClientResultChan != nil {
+		close(v.SSHClientResultChan)
+		v.SSHClientResultChan = nil
 	}
-	if v.State.SSHProcessChan != nil {
-		close(v.State.SSHProcessChan)
-		v.State.SSHProcessChan = nil
+	if v.SSHProcessChan != nil {
+		close(v.SSHProcessChan)
+		v.SSHProcessChan = nil
+	}
+	if v.ProxyRequestChan != nil {
+		close(v.ProxyRequestChan)
+		v.ProxyRequestChan = nil
 	}
 	return nil
 }
 
-// handleSSHConnectionTick 处理 SSH 连接动画 tick
 func (v *SSHProxyView) handleSSHConnectionTick() (views.View, tea.Cmd) {
-	configName := v.App.GetCurrentConfig()
-	sshInfo := v.App.GetSSHInfo(configName)
+	configName := v.AppState.GetCurrentConfigName()
+	sshInfo := v.AppState.GetSSHInfo(configName)
 
-	if models.SSHConnectState(sshInfo.SSHConnectionState) == models.Connecting {
+	if sshInfo.SSHConnectionState == messages.Connecting {
 		sshInfo.SSHConnectionProcess++
-		v.App.SetSSHInfo(configName, sshInfo)
+		v.AppState.SetSSHInfo(configName, sshInfo)
+		// 只返回动画 tick，不处理消息监听
 		return v, tickSSHConnectionAnimation()
 	}
 
+	// 连接完成后，停止动画 tick
 	return v, nil
 }
 
-// handleSSHClientResult 处理 SSH 客户端结果
 func (v *SSHProxyView) handleSSHClientResult(msg messages.SSHClientResult) (views.View, tea.Cmd) {
-	configName := v.App.GetCurrentConfig()
-	sshInfo := v.App.GetSSHInfo(configName)
-
+	configName := v.AppState.GetCurrentConfigName()
+	sshInfo := v.AppState.GetSSHInfo(configName)
+	currentConfig := v.AppState.GetConfigs()[configName]
 	// 直接使用类型安全的结果
 	result := msg.Result
 	if result.Error != nil {
-		v.App.Error = messages.AppError{Error: &result.Error, IsFatal: false}
+		v.AppState.Error = messages.AppError{Error: &result.Error, IsFatal: false}
 
 		// 处理错误
-		sshInfo.SSHConnectionState = int(models.Error)
+		sshInfo.SSHConnectionState = messages.Error
 		sshInfo.CurrentInfo = ""
-		v.App.SetSSHInfo(configName, sshInfo)
+		v.AppState.SetSSHInfo(configName, sshInfo)
 		return v, nil
 	}
 
 	// 更新 SSH 客户端
 	sshInfo.SSHClient = result.Client
-	sshInfo.SSHConnectionState = int(models.Connected)
+	sshInfo.SSHServicesReverseProxy = proxy.NewtHttpServiceProxyServer(*currentConfig.LocalHttpPort, currentConfig.Services, result.Client)
+	sshInfo.SSHConnectionState = messages.Connected
 	sshInfo.CurrentInfo = ""
-	v.App.SetSSHInfo(configName, sshInfo)
+	v.AppState.SetSSHInfo(configName, sshInfo)
 
-	return v, listenToSSHChannels(v.State.SSHClientChan, v.State.SSHProcessChan) // 继续监听
+	return v, startSSHServicesReverseProxy(v)
 }
 
-// handleSSHProcessResult 处理 SSH 进程结果
 func (v *SSHProxyView) handleSSHProcessResult(msg messages.SSHProcessResult) (views.View, tea.Cmd) {
-	configName := v.App.GetCurrentConfig()
-	sshInfo := v.App.GetSSHInfo(configName)
+	configName := v.AppState.GetCurrentConfigName()
+	sshInfo := v.AppState.GetSSHInfo(configName)
 
-	// 直接使用类型安全的结果
 	result := msg.Result
 	if result.Error != nil {
-		v.App.Error = messages.AppError{Error: &result.Error, IsFatal: false}
-		sshInfo.SSHConnectionState = int(models.Error)
+		v.AppState.Error = messages.AppError{Error: &result.Error, IsFatal: false}
+		sshInfo.SSHConnectionState = messages.Error
 		sshInfo.CurrentInfo = ""
-		v.App.SetSSHInfo(configName, sshInfo)
+		v.AppState.SetSSHInfo(configName, sshInfo)
 		return v, nil
 	}
 
-	// 更新连接进度和当前信息
 	sshInfo.SSHConnectionProcess = result.CompletedHopsCount
-	sshInfo.CurrentInfo = result.Message // 显示连接过程中的消息
-	v.App.SetSSHInfo(configName, sshInfo)
+	sshInfo.CurrentInfo = result.Message
+	v.AppState.SetSSHInfo(configName, sshInfo)
 
-	// 如果所有跳都完成了，更新状态
 	if result.CompletedHopsCount >= result.TotalHopsCount {
-		sshInfo.SSHConnectionState = int(models.Connected)
+		sshInfo.SSHConnectionState = messages.Connected
 		sshInfo.CurrentInfo = ""
-		v.App.SetSSHInfo(configName, sshInfo)
+		v.AppState.SetSSHInfo(configName, sshInfo)
 	}
 
-	return v, listenToSSHChannels(v.State.SSHClientChan, v.State.SSHProcessChan) // 继续监听
+	return v, waitForSSHProcessResult(v.SSHProcessChan)
 }
 
-// handleKeyPress 处理键盘输入
-func (v *SSHProxyView) handleKeyPress(msg tea.KeyMsg) (views.View, tea.Cmd) {
-	// SSH 代理视图特定的键盘处理
-	// 全局快捷键（如 ctrl+c, q）由 App 层处理
-	switch msg.String() {
-	case "r":
-		// 重新连接
-		return v, nil
-	case "s":
-		// 显示状态
-		return v, nil
-	default:
-		return v, nil
-	}
-}
-
-// tickSSHConnectionAnimation 创建 SSH 连接动画 tick 命令
 func tickSSHConnectionAnimation() tea.Cmd {
 	return tea.Tick(time.Millisecond*100, func(t time.Time) tea.Msg {
 		return messages.SSHConnectionTick{}
 	})
 }
 
-// listenToSSHChannels 监听 SSH channel
-func listenToSSHChannels(sshClientChan chan proxy.SSHClientResultChan, sshProcessChan chan proxy.SSHProcessChan) tea.Cmd {
+func waitForSSHClientResult(ch chan proxy.SSHClientResultChan) tea.Cmd {
 	return func() tea.Msg {
-		select {
-		case result := <-sshClientChan:
-			return messages.SSHClientResult{Result: result}
-		case result := <-sshProcessChan:
-			return messages.SSHProcessResult{Result: result}
-		}
+		result := <-ch // 阻塞等待
+		return messages.SSHClientResult{Result: result}
 	}
+}
+
+func waitForSSHProcessResult(ch chan proxy.SSHProcessChan) tea.Cmd {
+	return func() tea.Msg {
+		result := <-ch // 阻塞等待
+		return messages.SSHProcessResult{Result: result}
+	}
+}
+
+func waitForProxyRequestResult(ch chan proxy.ProxyRequestResult) tea.Cmd {
+	return func() tea.Msg {
+		result := <-ch // 阻塞等待
+		return messages.ProxyRequestResult{Result: result}
+	}
+}
+
+func startSSHServicesReverseProxy(v *SSHProxyView) tea.Cmd {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+			}
+		}()
+
+		// 检查 SSH 连接状态
+		configName := v.AppState.GetCurrentConfigName()
+		sshInfo := v.AppState.GetSSHInfo(configName)
+
+		if sshInfo.SSHClient == nil {
+			return
+		}
+
+		v.AppState.GetSSHInfo(v.AppState.GetCurrentConfigName()).SSHServicesReverseProxy.AsyncStart(v.ProxyRequestChan)
+	}()
+	return nil
+}
+
+func (v *SSHProxyView) handleProxyRequestResult(msg messages.ProxyRequestResult) (views.View, tea.Cmd) {
+	configName := v.AppState.GetCurrentConfigName()
+	sshInfo := v.AppState.GetSSHInfo(configName)
+
+	result := msg.Result
+	logEntry := fmt.Sprintf("[%s] %s %s - %d (%.2fs)",
+		result.StartTime.Format("15:04:05"),
+		result.Method,
+		result.URL,
+		result.StatusCode,
+		result.Duration.Seconds())
+
+	sshInfo.HTTPProxyLogs = append(sshInfo.HTTPProxyLogs, logEntry)
+
+	if len(sshInfo.HTTPProxyLogs) > 100 {
+		sshInfo.HTTPProxyLogs = sshInfo.HTTPProxyLogs[len(sshInfo.HTTPProxyLogs)-100:]
+	}
+
+	v.AppState.SetSSHInfo(configName, sshInfo)
+
+	return v, waitForProxyRequestResult(v.ProxyRequestChan)
 }

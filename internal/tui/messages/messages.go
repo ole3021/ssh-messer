@@ -43,14 +43,24 @@ type SSHProcessResult struct {
 	Result proxy.SSHProcessChan
 }
 
+type SSHConnectState int
+
+const (
+	Disconnected SSHConnectState = iota
+	Connecting
+	Connected
+	Error
+)
+
 // SSHInfo 结构体：SSH 连接信息
 type SSHInfo struct {
-	SSHClient            interface{} // use interface{} to avoid circular dependency
-	SSHConnectionState   int
-	SSHConnectionProcess int
-	CurrentInfo          string
-	HTTPProxyLogs        []string
-	DockerProxyLogs      []string
+	SSHClient               interface{}         // use interface{} to avoid circular dependency
+	SSHServicesReverseProxy *proxy.ServiceProxy // use interface{} to avoid circular dependency
+	SSHConnectionState      SSHConnectState
+	SSHConnectionProcess    int
+	CurrentInfo             string
+	HTTPProxyLogs           []string
+	DockerProxyLogs         []string
 }
 
 // ==================== 动画相关消息 ====================
@@ -68,10 +78,9 @@ type ViewChangeMsg struct {
 	TargetView int // 使用 int 避免循环依赖
 }
 
-// ==================== 生命周期相关消息 ====================
-
-// CleanupMsg 消息：请求清理资源
-type CleanupMsg struct{}
+type ProxyRequestResult struct {
+	Result proxy.ProxyRequestResult
+}
 
 // 确保所有消息类型都实现了 tea.Msg 接口
 var _ tea.Msg = AppError{}
@@ -83,4 +92,4 @@ var _ tea.Msg = SSHProcessResult{}
 var _ tea.Msg = WelcomeTick{}
 var _ tea.Msg = SSHConnectionTick{}
 var _ tea.Msg = ViewChangeMsg{}
-var _ tea.Msg = CleanupMsg{}
+var _ tea.Msg = ProxyRequestResult{}

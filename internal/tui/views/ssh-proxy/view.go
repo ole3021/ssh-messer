@@ -2,16 +2,15 @@ package sshproxy
 
 import (
 	"fmt"
-	"ssh-messer/internal/tui/models"
+	"ssh-messer/internal/tui/messages"
 	"ssh-messer/internal/tui/views/styles"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
 
-// RenderSSHProxyView 渲染 SSH 代理视图
-func RenderSSHProxyView(state *models.SSHProxyViewState, ui *models.UIState, app *models.AppState) string {
-	width, height := ui.Width, ui.Height
+func RenderSSHProxyView(v *SSHProxyView) string {
+	width, height := v.UIState.Width, v.UIState.Height
 	if width == 0 {
 		width = 80
 	}
@@ -22,32 +21,22 @@ func RenderSSHProxyView(state *models.SSHProxyViewState, ui *models.UIState, app
 	// 组合主内容和状态栏
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
-		renderSSHProxyContent(state, ui, app),
-		renderStatusBar(state, ui, app),
+		renderSSHProxyContent(v),
+		renderStatusBar(v),
 	)
 }
 
 // renderSSHProxyContent 渲染 SSH 代理主内容
-func renderSSHProxyContent(state *models.SSHProxyViewState, ui *models.UIState, app *models.AppState) string {
-	width, height := ui.Width, ui.Height
-	if width == 0 {
-		width = 80
-	}
-	if height == 0 {
-		height = 24
-	}
-
-	contentHeight := height - 1
-
-	currentConfigName := app.GetCurrentConfig()
-	sshInfo := app.GetSSHInfo(currentConfigName)
+func renderSSHProxyContent(v *SSHProxyView) string {
+	currentConfigName := v.AppState.GetCurrentConfigName()
+	sshInfo := v.AppState.GetSSHInfo(currentConfigName)
 
 	content := lipgloss.JoinVertical(
 		lipgloss.Center,
 		styles.TitleStyle.Render(currentConfigName),
 		"",
 		styles.ItemStyle.Render("当前状态:"),
-		styles.ItemStyle.Render(getSSHStateString(models.SSHConnectState(sshInfo.SSHConnectionState))),
+		styles.ItemStyle.Render(getSSHStateString(sshInfo.SSHConnectionState)),
 		"",
 		styles.ItemStyle.Render("HTTP Proxy Logs:"),
 		styles.ItemStyle.Render(strings.Join(sshInfo.HTTPProxyLogs, "\n")),
@@ -56,38 +45,34 @@ func renderSSHProxyContent(state *models.SSHProxyViewState, ui *models.UIState, 
 		styles.ItemStyle.Render(strings.Join(sshInfo.DockerProxyLogs, "\n")),
 	)
 
-	return lipgloss.Place(width, contentHeight, lipgloss.Left, lipgloss.Top, content)
+	return lipgloss.Place(v.UIState.Width, v.UIState.Height, lipgloss.Left, lipgloss.Top, content)
 }
 
 // renderStatusBar 渲染状态栏
-func renderStatusBar(state *models.SSHProxyViewState, ui *models.UIState, app *models.AppState) string {
-	width := ui.Width
-	if width == 0 {
-		width = 80
-	}
-
+func renderStatusBar(v *SSHProxyView) string {
 	// 获取 SSH 状态
-	currentConfigName := app.GetCurrentConfig()
-	sshInfo := app.GetSSHInfo(currentConfigName)
-	sshState := getSSHStateString(models.SSHConnectState(sshInfo.SSHConnectionState))
+	currentConfigName := v.AppState.GetCurrentConfigName()
+	sshInfo := v.AppState.GetSSHInfo(currentConfigName)
+	connectionState := sshInfo.SSHConnectionState
 
 	// 根据状态选择样式和图标
+
 	var sshStatusStyle lipgloss.Style
 	var statusIcon string
 
-	switch sshState {
-	case "Connected":
+	switch connectionState {
+	case messages.Connected:
 		sshStatusStyle = styles.SSHStatusConnectedStyle
 		statusIcon = "●"
-	case "Connecting":
+	case messages.Connecting:
 		sshStatusStyle = styles.SSHStatusConnectingStyle
 		icons := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 		index := sshInfo.SSHConnectionProcess % 10
 		statusIcon = fmt.Sprintf(" %s", icons[index])
-	case "Disconnected":
+	case messages.Disconnected:
 		sshStatusStyle = styles.SSHStatusDisconnectedStyle
 		statusIcon = "○"
-	case "Error":
+	case messages.Error:
 		sshStatusStyle = styles.SSHStatusErrorStyle
 		statusIcon = "!"
 	default:
@@ -96,7 +81,7 @@ func renderStatusBar(state *models.SSHProxyViewState, ui *models.UIState, app *m
 	}
 
 	// 左侧 SSH 状态
-	leftStatus := sshStatusStyle.Render(fmt.Sprintf("%s %s", statusIcon, sshState))
+	leftStatus := sshStatusStyle.Render(fmt.Sprintf("%s %s", statusIcon, getSSHStateString(connectionState)))
 
 	// 右侧配置名称
 	rightStatus := styles.ConfigNameStyle.Render(fmt.Sprintf(" %s < ", currentConfigName))
@@ -104,7 +89,7 @@ func renderStatusBar(state *models.SSHProxyViewState, ui *models.UIState, app *m
 	// 计算中间填充空间
 	leftWidth := lipgloss.Width(leftStatus)
 	rightWidth := lipgloss.Width(rightStatus)
-	gap := width - leftWidth - rightWidth
+	gap := v.UIState.Width - leftWidth - rightWidth
 	if gap < 0 {
 		gap = 0
 	}
@@ -137,19 +122,19 @@ func renderStatusBar(state *models.SSHProxyViewState, ui *models.UIState, app *m
 		rightStatus,
 	)
 
-	return styles.StatusBarStyle.Width(width).Render(statusBar)
+	return styles.StatusBarStyle.Width(v.UIState.Width).Render(statusBar)
 }
 
 // getSSHStateString 获取 SSH 状态字符串
-func getSSHStateString(state models.SSHConnectState) string {
+func getSSHStateString(state messages.SSHConnectState) string {
 	switch state {
-	case models.Disconnected:
+	case messages.Disconnected:
 		return "Disconnected"
-	case models.Connecting:
+	case messages.Connecting:
 		return "Connecting"
-	case models.Connected:
+	case messages.Connected:
 		return "Connected"
-	case models.Error:
+	case messages.Error:
 		return "Error"
 	default:
 		return "Unknown"

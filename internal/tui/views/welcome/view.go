@@ -2,7 +2,7 @@ package welcome
 
 import (
 	"ssh-messer/internal/tui/components/config"
-	"ssh-messer/internal/tui/models"
+	"ssh-messer/internal/tui/types"
 	"ssh-messer/internal/tui/views/styles"
 	"strings"
 
@@ -10,9 +10,10 @@ import (
 )
 
 // RenderWelcomeView 渲染欢迎视图
-func RenderWelcomeView(state *models.WelcomeViewState, configComponent *config.ConfigComponent, ui *models.UIState) string {
+func RenderWelcomeView(welcomeAnimationProgress int, configComponent *config.ConfigComponent, uiState *types.UIState) string {
 	// 获取终端尺寸，设置默认值
-	width, height := ui.Width, ui.Height
+	width := uiState.Width
+	height := uiState.Height
 	if width == 0 {
 		width = 80
 	}
@@ -20,7 +21,7 @@ func RenderWelcomeView(state *models.WelcomeViewState, configComponent *config.C
 		height = 24
 	}
 
-	ascii := renderASCIIArt(state.WelcomeAnimationProgress)
+	ascii := renderASCIIArt(welcomeAnimationProgress)
 	config := configComponent.View()
 	footer := renderFooter()
 

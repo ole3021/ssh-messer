@@ -1,7 +1,7 @@
 package views
 
 import (
-	"ssh-messer/internal/tui/models"
+	"ssh-messer/internal/tui/types"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -15,18 +15,18 @@ type View interface {
 	// View 渲染视图
 	View() string
 	// GetType 获取视图类型
-	GetType() models.ViewEnum
+	GetType() types.ViewEnum
 	// Cleanup 清理视图资源，返回清理命令
 	Cleanup() tea.Cmd
 }
 
 // BaseView 基础视图结构
 type BaseView struct {
-	Type models.ViewEnum
+	Type types.ViewEnum
 }
 
 // GetType 获取视图类型
-func (v *BaseView) GetType() models.ViewEnum {
+func (v *BaseView) GetType() types.ViewEnum {
 	return v.Type
 }
 
