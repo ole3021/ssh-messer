@@ -4,13 +4,21 @@ import (
 	"fmt"
 	"os"
 
-	"ssh-messer/internal/tui/app"
+	"ssh-messer/internal/tui"
+	"ssh-messer/pkg"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "github.com/charmbracelet/bubbletea/v2"
 )
 
 func main() {
-	p := tea.NewProgram(app.NewAppModel(), tea.WithAltScreen())
+	pkg.InitLogger("file")
+
+	model := tui.New()
+	p := tea.NewProgram(model)
+
+	// 订阅异步事件
+	go model.Subscribe(p)
+
 	if _, err := p.Run(); err != nil {
 		fmt.Println("##############################################################################")
 		fmt.Printf("Ops, something went wrong: %v !", err)
