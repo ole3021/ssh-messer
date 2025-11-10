@@ -58,15 +58,13 @@ func (s *statusBarCmp) View() string {
 	}
 
 	status := proxy.Status
-	statusText := "Disconnected"
-	if status.IsConnected {
-		statusText = "Connected"
-	} else if status.IsConnecting {
-		statusText = "Connecting..."
-	}
+	var statusText string
 
+	if status.CurrentInfo != "" {
+		statusText = status.CurrentInfo
+	}
 	if status.LastError != nil {
-		statusText += " | Error: " + status.LastError.Error()
+		statusText = "Error: " + status.LastError.Error()
 	}
 
 	return statusText

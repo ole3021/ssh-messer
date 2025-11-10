@@ -58,3 +58,15 @@ func (a *appModel) setupSSHStatusSubscriber() {
 		broker.Subscribe,
 	)
 }
+
+// setupServiceProxyLogSubscriber 设置 Service Proxy 日志订阅
+func (a *appModel) setupServiceProxyLogSubscriber() {
+	broker := ssh_proxy.GetServiceProxyLogBroker()
+	setupSubscriber(
+		a.eventsCtx,
+		a.serviceEventsWG,
+		a.events,
+		"service-proxy-log",
+		broker.Subscribe,
+	)
+}

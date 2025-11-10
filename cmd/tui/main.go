@@ -19,6 +19,9 @@ func main() {
 	// 订阅异步事件
 	go model.Subscribe(p)
 
+	// 确保在退出时清理资源
+	defer model.Cleanup()
+
 	if _, err := p.Run(); err != nil {
 		fmt.Println("##############################################################################")
 		fmt.Printf("Ops, something went wrong: %v !", err)

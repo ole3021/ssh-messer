@@ -2,9 +2,12 @@ package tui
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"sync"
 
 	"ssh-messer/internal/pubsub"
+	"ssh-messer/internal/ssh_proxy"
 	"ssh-messer/internal/tui/commands"
 	"ssh-messer/internal/tui/components/core/status"
 	"ssh-messer/internal/tui/messages"
@@ -12,6 +15,7 @@ import (
 	"ssh-messer/internal/tui/page/welcome"
 	"ssh-messer/internal/tui/types"
 	"ssh-messer/internal/tui/util"
+	"ssh-messer/pkg"
 
 	"github.com/charmbracelet/bubbles/v2/key"
 	tea "github.com/charmbracelet/bubbletea/v2"
@@ -108,6 +112,17 @@ func (a *appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case pubsub.Event[types.EveSSHStatusUpdate]:
 		model, cmd := a.handleSSHStatusUpdate(msg)
 		return model, cmd
+
+	// Service proxy log events via pubsub
+	case pubsub.Event[ssh_proxy.ServiceProxyLogEvent]:
+		// Forward to current page
+		item, ok := a.pages[a.currentPage]
+		if !ok {
+			return a, nil
+		}
+		updated, cmd := item.Update(msg)
+		a.pages[a.currentPage] = updated
+		return a, cmd
 
 	case tea.KeyMsg:
 		return a, a.handleKeyPressMsg(msg)
@@ -258,7 +273,12 @@ func (a *appModel) handleAppErrorMsg(appErr messages.AppErrMsg) (tea.Model, tea.
 // handleSSHStatusUpdate handles SSH status updates from pubsub
 func (a *appModel) handleSSHStatusUpdate(event pubsub.Event[types.EveSSHStatusUpdate]) (tea.Model, tea.Cmd) {
 	update := event.Payload
-	a.appState.GetSSHProxy(update.ConfigName).UpdateSSHProxyStatus(update.Status)
+	proxy := a.appState.GetSSHProxy(update.ConfigName)
+	if proxy == nil {
+		pkg.Logger.Warn().Str("configName", update.ConfigName).Msg("SSH proxy not found for status update")
+		return a, nil
+	}
+	proxy.UpdateSSHProxyStatus(update.Status)
 
 	// Forward to current page
 	item, ok := a.pages[a.currentPage]
@@ -301,5 +321,27 @@ func New() *appModel {
 	// 设置 SSH 状态更新订阅
 	model.setupSSHStatusSubscriber()
 
+	// 设置 Service Proxy 日志订阅
+	model.setupServiceProxyLogSubscriber()
+
 	return model
+}
+
+// Cleanup 清理资源
+func (a *appModel) Cleanup() {
+	// 清理屏幕内容
+	// 清除整个屏幕
+	fmt.Fprint(os.Stdout, "\033[2J")
+	// 将光标移动到左上角 (0,0)
+	fmt.Fprint(os.Stdout, "\033[H")
+	// 显示光标
+	fmt.Fprint(os.Stdout, "\033[?25h")
+	// 重置所有格式
+	fmt.Fprint(os.Stdout, "\033[0m")
+
+	if a.eventsCancel != nil {
+		a.eventsCancel()
+	}
+	// 等待所有 goroutine 完成
+	a.serviceEventsWG.Wait()
 }

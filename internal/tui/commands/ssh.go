@@ -1,6 +1,8 @@
 package commands
 
 import (
+	"time"
+
 	"ssh-messer/internal/ssh_proxy"
 	"ssh-messer/internal/tui/messages"
 	"ssh-messer/internal/tui/types"
@@ -25,7 +27,20 @@ func InitSSHProxy(appState *types.AppState, configName string) tea.Cmd {
 			return nil
 		}
 
-		sshProxy := ssh_proxy.NewSSHHopsProxy(configName, config.SSHHops)
+		// 从配置读取健康检查间隔，如果未配置则使用默认值 30 秒
+		healthCheckInterval := 30 * time.Second
+		if config.HealthCheckIntervalSecs != nil {
+			healthCheckInterval = time.Duration(*config.HealthCheckIntervalSecs) * time.Second
+		}
+
+		// 从配置获取 services 和 localPort
+		services := config.SSHServices
+		localPort := ""
+		if config.LocalHttpPort != nil {
+			localPort = *config.LocalHttpPort
+		}
+
+		sshProxy := ssh_proxy.NewSSHHopsProxy(configName, config.SSHHops, healthCheckInterval, services, localPort)
 		appState.SetSSHProxy(configName, sshProxy)
 
 		go sshProxy.Connect()

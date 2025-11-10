@@ -163,7 +163,11 @@ func (s *sidebarCmp) generateSSHHopsPart() []string {
 
 	status := proxy.Status
 	if status.IsConnected {
-		hopLines = append(hopLines, "\n\n🟢 Connected")
+		if status.IsChecking {
+			hopLines = append(hopLines, "\n\n🟢 Connected 👀")
+		} else {
+			hopLines = append(hopLines, "\n\n🟢 Connected")
+		}
 	} else if status.IsConnecting {
 		hopLines = append(hopLines, "\n\n🟡 Connecting")
 	} else {
