@@ -33,3 +33,7 @@ go.work.sum
 
 .secrets/
 .DS_Store
+
+# Build artifacts
+dist/
+ssh-messer
