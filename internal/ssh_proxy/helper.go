@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"time"
 
 	"ssh-messer/pkg"
@@ -91,9 +92,20 @@ func parsePrivateKey(sshHopConfig SSHHopConfig) (ssh.Signer, error) {
 
 	pkg.Logger.Debug().Str("alias", aliasName).Str("key_path", *sshHopConfig.PrivateKeyPath).Msg("[SSHHelper] 开始解析私钥")
 
-	privateKey, err := os.ReadFile(*sshHopConfig.PrivateKeyPath)
+	// 展开 ~ 符号
+	keyPath := *sshHopConfig.PrivateKeyPath
+	if strings.HasPrefix(keyPath, "~") {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			pkg.Logger.Error().Err(err).Str("alias", aliasName).Msg("[SSHHelper] 私钥解析失败: 无法获取用户主目录")
+			return nil, fmt.Errorf("failed to get user home directory: %v", err)
+		}
+		keyPath = strings.Replace(keyPath, "~", homeDir, 1)
+	}
+
+	privateKey, err := os.ReadFile(keyPath)
 	if err != nil {
-		pkg.Logger.Error().Err(err).Str("alias", aliasName).Str("key_path", *sshHopConfig.PrivateKeyPath).Msg("[SSHHelper] 私钥解析失败: 无法读取私钥文件")
+		pkg.Logger.Error().Err(err).Str("alias", aliasName).Str("key_path", keyPath).Msg("[SSHHelper] 私钥解析失败: 无法读取私钥文件")
 		return nil, fmt.Errorf("failed to read private key file: %v", err)
 	}
 
