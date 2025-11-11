@@ -40,6 +40,18 @@ func InitSSHProxy(appState *types.AppState, configName string) tea.Cmd {
 			localPort = *config.LocalHttpPort
 		}
 
+		// 如果配置了 local_http_port 且有 services，在启动前检查端口是否可用
+		if localPort != "" && len(services) > 0 {
+			if err := ssh_proxy.CheckPortAvailable(localPort); err != nil {
+				pkg.Logger.Error().Err(err).Str("configName", configName).Str("port", localPort).Msg("[InitSSHProxy] 端口检查失败")
+				return messages.AppErrMsg{
+					Error:   err,
+					IsFatal: true,
+				}
+			}
+			pkg.Logger.Info().Str("configName", configName).Str("port", localPort).Msg("[InitSSHProxy] 端口检查通过")
+		}
+
 		sshProxy := ssh_proxy.NewSSHHopsProxy(configName, config.SSHHops, healthCheckInterval, services, localPort)
 		appState.SetSSHProxy(configName, sshProxy)
 

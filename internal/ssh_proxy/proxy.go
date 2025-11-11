@@ -60,6 +60,7 @@ func NewSSHHopsProxy(configName string, hopsConfigs []SSHHopConfig, healthCheckI
 		configName:          configName,
 		hopsConfigs:         hopsConfigs,
 		client:              nil,
+		hopClients:          make(map[int]*ssh.Client),
 		Status:              status,
 		serviceProxy:        nil,
 		healthStop:          nil,
@@ -75,6 +76,24 @@ func NewSSHHopsProxy(configName string, hopsConfigs []SSHHopConfig, healthCheckI
 
 func (p *SSHHopsProxy) GetHopsConfigs() []SSHHopConfig {
 	return p.hopsConfigs
+}
+
+// GetClient 获取 SSH 客户端（用于测试和端口转发）
+func (p *SSHHopsProxy) GetClient() *ssh.Client {
+	return p.client
+}
+
+// GetClientForHopOrder 根据 hopOrder 获取对应的 SSH 客户端
+// 如果 hopOrder 为 0 或不存在，返回默认的最后一个 hop 的 client
+func (p *SSHHopsProxy) GetClientForHopOrder(hopOrder int) *ssh.Client {
+	if hopOrder <= 0 {
+		return p.client
+	}
+	if client, exists := p.hopClients[hopOrder]; exists {
+		return client
+	}
+	// 如果指定的 hopOrder 不存在，返回默认的最后一个 hop 的 client
+	return p.client
 }
 
 func GetHopDisplayName(hopConfig SSHHopConfig) string {
@@ -215,6 +234,10 @@ func (p *SSHHopsProxy) Connect() {
 
 	// 所有跳板连接成功
 	pkg.Logger.Info().Str("config_name", p.configName).Int("total_hops", len(p.hopsConfigs)).Msg("[SSHHopsProxy] 所有 hop 连接成功")
+
+	// 为每个不同的 hopOrder 创建对应的 client
+	p.createHopOrderClients()
+
 	p.updateStatus(func(s *SSHProxyStatus) {
 		s.CurrentInfo = ""
 		s.IsConnecting = false
@@ -234,6 +257,91 @@ func (p *SSHHopsProxy) Connect() {
 	}
 }
 
+// createHopOrderClients 为每个不同的 hopOrder 创建对应的 SSH client
+func (p *SSHHopsProxy) createHopOrderClients() {
+	// 收集所有服务中不同的 hopOrder 值
+	hopOrders := make(map[int]bool)
+	for _, service := range p.services {
+		if service.HopOrder != nil && *service.HopOrder > 0 {
+			hopOrders[*service.HopOrder] = true
+		}
+	}
+
+	// 为每个 hopOrder 创建对应的 client
+	for hopOrder := range hopOrders {
+		if hopOrder > len(p.hopsConfigs) {
+			pkg.Logger.Warn().Str("config_name", p.configName).Int("hopOrder", hopOrder).Int("total_hops", len(p.hopsConfigs)).Msg("[SSHHopsProxy] hopOrder 超出 hops 数量，跳过")
+			continue
+		}
+
+		client, err := p.connectHops(hopOrder)
+		if err != nil {
+			pkg.Logger.Error().Err(err).Str("config_name", p.configName).Int("hopOrder", hopOrder).Msg("[SSHHopsProxy] 创建 hopOrder client 失败")
+			continue
+		}
+
+		p.hopClients[hopOrder] = client
+		pkg.Logger.Info().Str("config_name", p.configName).Int("hopOrder", hopOrder).Msg("[SSHHopsProxy] hopOrder client 创建成功")
+	}
+}
+
+// connectHops 连接指定数量的 hops，返回最终的 SSH client
+func (p *SSHHopsProxy) connectHops(numHops int) (*ssh.Client, error) {
+	if numHops <= 0 || numHops > len(p.hopsConfigs) {
+		return nil, fmt.Errorf("invalid hop count: %d (total hops: %d)", numHops, len(p.hopsConfigs))
+	}
+
+	var currentClient *ssh.Client
+	for i := 0; i < numHops; i++ {
+		hopConfig := p.hopsConfigs[i]
+		port := 22
+		if hopConfig.Port != nil {
+			port = *hopConfig.Port
+		}
+		sshAddress := *hopConfig.Host + ":" + strconv.Itoa(port)
+
+		sshClientConfig, err := transformSSHHopsConfigToSSHClientConfig(hopConfig)
+		if err != nil {
+			if currentClient != nil {
+				currentClient.Close()
+			}
+			return nil, fmt.Errorf("配置 SSH 跳板失败: %v", err)
+		}
+
+		if i == 0 {
+			// 第一个 hop：直接连接到第一台服务器
+			currentClient, err = ssh.Dial("tcp", sshAddress, sshClientConfig)
+			if err != nil {
+				return nil, fmt.Errorf("连接 hop %d 失败: %v", i+1, err)
+			}
+		} else {
+			// 后续 hop：通过前一个 client 的 Dial 方法连接到下一台服务器
+			conn, err := currentClient.Dial("tcp", sshAddress)
+			if err != nil {
+				if currentClient != nil {
+					currentClient.Close()
+				}
+				return nil, fmt.Errorf("通过前一个 hop 连接失败: %v", err)
+			}
+
+			// 基于这个 TCP 连接创建新的 SSH 客户端连接
+			nconn, chans, reqs, err := ssh.NewClientConn(conn, sshAddress, sshClientConfig)
+			if err != nil {
+				conn.Close()
+				if currentClient != nil {
+					currentClient.Close()
+				}
+				return nil, fmt.Errorf("创建 SSH 客户端连接失败: %v", err)
+			}
+
+			// 创建新的 SSH 客户端
+			currentClient = ssh.NewClient(nconn, chans, reqs)
+		}
+	}
+
+	return currentClient, nil
+}
+
 func (p *SSHHopsProxy) Disconnect() {
 	pkg.Logger.Debug().Str("config_name", p.configName).Msg("[SSHHopsProxy] 断开连接")
 	// 停止健康检查
@@ -241,6 +349,15 @@ func (p *SSHHopsProxy) Disconnect() {
 
 	// 停止 services 代理
 	p.StopServices()
+
+	// 关闭所有 hopOrder 的 client
+	for hopOrder, client := range p.hopClients {
+		if client != nil {
+			client.Close()
+			pkg.Logger.Debug().Str("config_name", p.configName).Int("hopOrder", hopOrder).Msg("[SSHHopsProxy] 关闭 hopOrder client")
+		}
+	}
+	p.hopClients = make(map[int]*ssh.Client)
 
 	if p.client != nil {
 		p.client.Close()
@@ -409,8 +526,11 @@ func (p *SSHHopsProxy) StartServices(services []SSHService, localPort string) er
 	// 停止现有的 services 代理
 	p.StopServices()
 
-	// 创建新的 services 代理
-	sp := NewServiceProxy(p.configName, localPort, services, p.client)
+	// 创建新的 services 代理，支持根据 hopOrder 选择 client
+	getClientForHop := func(hopOrder int) *ssh.Client {
+		return p.GetClientForHopOrder(hopOrder)
+	}
+	sp := NewServiceProxyWithHopSelector(p.configName, localPort, services, p.client, getClientForHop)
 	p.serviceProxy = sp
 
 	// 启动 services 代理

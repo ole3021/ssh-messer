@@ -1,6 +1,8 @@
 package ssh_proxy
 
 import (
+	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"net/http"
@@ -56,19 +58,25 @@ func truncateErrorMessage(msg string) string {
 // ServiceProxy 统一的 HTTP 反向代理服务器
 // ------------------------------------------------------------
 type ServiceProxy struct {
-	configName string
-	localPort  string
-	services   []SSHService
-	sshClient  *ssh.Client
-	server     *http.Server
-	serviceMap map[string]*SSHService // subdomain -> service mapping
-	mu         sync.RWMutex
-	stopped    bool
+	configName      string
+	localPort       string
+	services        []SSHService
+	sshClient       *ssh.Client
+	getClientForHop func(int) *ssh.Client // 根据 hopOrder 获取对应的 SSH client
+	server          *http.Server
+	serviceMap      map[string]*SSHService // subdomain -> service mapping
+	mu              sync.RWMutex
+	stopped         bool
 }
 
 // NewServiceProxy 创建新的 Service Proxy
 // serviceMap 在构建后只读，确保并发安全
 func NewServiceProxy(configName string, localPort string, services []SSHService, sshClient *ssh.Client) *ServiceProxy {
+	return NewServiceProxyWithHopSelector(configName, localPort, services, sshClient, nil)
+}
+
+// NewServiceProxyWithHopSelector 创建新的 Service Proxy，支持根据 hopOrder 选择 client
+func NewServiceProxyWithHopSelector(configName string, localPort string, services []SSHService, defaultClient *ssh.Client, getClientForHop func(int) *ssh.Client) *ServiceProxy {
 	serviceMap := make(map[string]*SSHService)
 	for i := range services {
 		service := &services[i]
@@ -78,12 +86,13 @@ func NewServiceProxy(configName string, localPort string, services []SSHService,
 	}
 
 	return &ServiceProxy{
-		configName: configName,
-		localPort:  localPort,
-		services:   services,
-		sshClient:  sshClient,
-		serviceMap: serviceMap,
-		stopped:    false,
+		configName:      configName,
+		localPort:       localPort,
+		services:        services,
+		sshClient:       defaultClient,
+		getClientForHop: getClientForHop,
+		serviceMap:      serviceMap,
+		stopped:         false,
 	}
 }
 
@@ -127,11 +136,10 @@ func (sp *ServiceProxy) StartReverseProxy() error {
 func (sp *ServiceProxy) handleReverseProxyRequest(w http.ResponseWriter, r *http.Request) {
 	sp.mu.RLock()
 	stopped := sp.stopped
-	sshClient := sp.sshClient
 	serviceMap := sp.serviceMap
 	sp.mu.RUnlock()
 
-	if stopped || sshClient == nil {
+	if stopped {
 		http.Error(w, "Service proxy is not available", http.StatusServiceUnavailable)
 		return
 	}
@@ -164,6 +172,30 @@ func (sp *ServiceProxy) handleReverseProxyRequest(w http.ResponseWriter, r *http
 
 	if targetService == nil {
 		http.Error(w, "No service found for this request", http.StatusNotFound)
+		return
+	}
+
+	// 根据 service 的 HopOrder 选择对应的 SSH client
+	sp.mu.RLock()
+	getClientForHop := sp.getClientForHop
+	defaultClient := sp.sshClient
+	sp.mu.RUnlock()
+
+	var sshClient *ssh.Client
+	if targetService.HopOrder != nil && *targetService.HopOrder > 0 && getClientForHop != nil {
+		// 使用指定 hopOrder 的 client
+		sshClient = getClientForHop(*targetService.HopOrder)
+		if sshClient == nil {
+			// 如果指定的 hopOrder client 不存在，使用默认 client
+			sshClient = defaultClient
+		}
+	} else {
+		// 使用默认 client
+		sshClient = defaultClient
+	}
+
+	if sshClient == nil {
+		http.Error(w, "SSH client is not available", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -202,9 +234,9 @@ func (sp *ServiceProxy) handleReverseProxyRequest(w http.ResponseWriter, r *http
 		responseSize:   0,
 	}
 
-	// 通过 SSH 隧道建立到远程服务的连接
-	remoteAddr := buildRemoteAddress(targetService)
-	remoteURL, err := url.Parse("http://" + remoteAddr)
+	// 构建服务配置
+	serviceConfig := buildServiceConfig(targetService)
+	remoteURL, err := url.Parse(serviceConfig.scheme + "://" + serviceConfig.remoteAddr)
 	if err != nil {
 		// 计算请求用时
 		duration := time.Since(startTime)
@@ -233,11 +265,17 @@ func (sp *ServiceProxy) handleReverseProxyRequest(w http.ResponseWriter, r *http
 	originalDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
 		originalDirector(req)
-		// 确保使用正确的 scheme 和 host
-		req.URL.Scheme = "http"
-		req.URL.Host = remoteAddr
+		// 使用配置中的 scheme 和 host
+		req.URL.Scheme = serviceConfig.scheme
+		req.URL.Host = serviceConfig.remoteAddr
+		// 重写 Host header（关键：用于 SNI 和虚拟主机识别）
+		req.Host = serviceConfig.remoteHost
 	}
-	proxy.Transport = &sshTransport{sshClient: sshClient}
+	proxy.Transport = &sshTransport{
+		sshClient:     sshClient,
+		useTLS:        serviceConfig.useTLS,
+		tlsServerName: serviceConfig.tlsServerName,
+	}
 
 	// 设置错误处理器以捕获错误消息
 	var errorMessage string
@@ -336,42 +374,104 @@ func buildRemoteAddress(service *SSHService) string {
 	return host + ":" + port
 }
 
+// ServiceConfig 服务配置信息
+type ServiceConfig struct {
+	scheme        string
+	remoteAddr    string
+	remoteHost    string
+	tlsServerName string
+	useTLS        bool
+}
+
+// buildServiceConfig 构建服务配置
+func buildServiceConfig(service *SSHService) ServiceConfig {
+	config := ServiceConfig{
+		scheme:     "http",
+		remoteAddr: buildRemoteAddress(service),
+		useTLS:     false,
+	}
+
+	// 确定是否使用 TLS
+	if service.UseTLS != nil && *service.UseTLS {
+		config.scheme = "https"
+		config.useTLS = true
+	}
+
+	// 确定远程 Host header
+	if service.RemoteHost != nil && *service.RemoteHost != "" {
+		config.remoteHost = *service.RemoteHost
+	} else if service.Host != nil && *service.Host != "" {
+		config.remoteHost = *service.Host
+	} else {
+		config.remoteHost = "localhost"
+	}
+
+	// 确定 TLS ServerName
+	if service.TLSServerName != nil && *service.TLSServerName != "" {
+		config.tlsServerName = *service.TLSServerName
+	} else if config.useTLS {
+		// 如果使用 TLS 但没有指定 ServerName，使用 remoteHost
+		config.tlsServerName = config.remoteHost
+	}
+
+	return config
+}
+
 // sshTransport 通过 SSH 隧道传输 HTTP 请求
 type sshTransport struct {
-	sshClient *ssh.Client
+	sshClient     *ssh.Client
+	useTLS        bool
+	tlsServerName string
 }
 
 func (t *sshTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// 从请求 URL 提取目标地址
 	targetAddr := req.URL.Host
 	if req.URL.Port() == "" {
-		if req.URL.Scheme == "https" {
+		if req.URL.Scheme == "https" || t.useTLS {
 			targetAddr += ":443"
 		} else {
 			targetAddr += ":80"
 		}
 	}
 
-	// 通过 SSH 客户端建立到远程服务的连接
-	conn, err := t.sshClient.Dial("tcp", targetAddr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to dial remote service through SSH: %v", err)
+	// 确定使用的 scheme
+	scheme := "http"
+	if t.useTLS {
+		scheme = "https"
 	}
 
 	// 创建请求的副本，清除 RequestURI（客户端请求不能设置 RequestURI）
 	newReq := req.Clone(req.Context())
 	newReq.RequestURI = "" // 清除 RequestURI，这是客户端请求的要求
-	newReq.URL.Scheme = "http"
+	newReq.URL.Scheme = scheme
 	newReq.URL.Host = targetAddr
 
-	// 创建 HTTP 客户端，使用自定义的 Dial 函数
-	client := &http.Client{
-		Transport: &http.Transport{
-			Dial: func(network, addr string) (net.Conn, error) {
-				return conn, nil
-			},
+	// 创建 HTTP Transport，通过 SSH 客户端建立连接
+	// 参考 maancoffee 的实现：让 Transport 自动处理 TLS
+	var tlsConfig *tls.Config
+	if t.useTLS {
+		tlsConfig = &tls.Config{
+			ServerName:         t.tlsServerName,
+			InsecureSkipVerify: false, // 验证证书
+		}
+	}
+
+	transport := &http.Transport{
+		DialContext: func(_ context.Context, network, addr string) (net.Conn, error) {
+			// 通过 SSH 客户端建立到远程服务的 TCP 连接
+			conn, err := t.sshClient.Dial("tcp", targetAddr)
+			if err != nil {
+				return nil, fmt.Errorf("failed to dial remote service through SSH (target: %s): %v", targetAddr, err)
+			}
+			return conn, nil
 		},
-		Timeout: 30 * time.Second,
+		TLSClientConfig: tlsConfig, // 如果使用 TLS，让 Transport 自动处理
+	}
+
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   30 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
@@ -380,7 +480,6 @@ func (t *sshTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// 执行请求
 	resp, err := client.Do(newReq)
 	if err != nil {
-		conn.Close()
 		return nil, fmt.Errorf("failed to execute request: %v", err)
 	}
 

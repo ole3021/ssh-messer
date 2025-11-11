@@ -52,6 +52,11 @@ func (s *statusBarCmp) View() string {
 		return "No configuration selected"
 	}
 
+	// 优先显示应用错误信息（包括端口检查失败等致命错误）
+	if s.appState.Error.Error != nil {
+		return "Error: " + s.appState.Error.Error.Error()
+	}
+
 	proxy := s.appState.GetSSHProxy(s.appState.CurrentConfigName)
 	if proxy == nil {
 		return "SSH Proxy not initialized"

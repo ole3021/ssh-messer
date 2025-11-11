@@ -18,17 +18,28 @@ type SSHHopConfig struct {
 	TimeoutSec     *int    `toml:"timeoutSec,omitempty"`
 }
 
+type ServicePage struct {
+	Name *string `toml:"name"`
+	URL  *string `toml:"url"`
+}
+
 type SSHService struct {
-	Host      *string `toml:"host"`
-	Port      *string `toml:"port"`
-	Subdomain *string `toml:"subdomain"`
-	Alias     *string `toml:"alias,omitempty"`
+	Host          *string       `toml:"host"`
+	Port          *string       `toml:"port"`
+	Subdomain     *string       `toml:"subdomain"`
+	Alias         *string       `toml:"alias,omitempty"`
+	UseTLS        *bool         `toml:"use_tls,omitempty"`
+	TLSServerName *string       `toml:"tls_server_name,omitempty"`
+	RemoteHost    *string       `toml:"remote_host,omitempty"`
+	Pages         []ServicePage `toml:"pages,omitempty"`
+	HopOrder      *int          `toml:"hopOrder,omitempty"`
 }
 
 type SSHHopsProxy struct {
 	configName          string
 	hopsConfigs         []SSHHopConfig
 	client              *ssh.Client
+	hopClients          map[int]*ssh.Client // 存储不同 hopOrder 对应的 SSH client
 	Status              SSHProxyStatus
 	serviceProxy        *ServiceProxy
 	healthStop          chan struct{}

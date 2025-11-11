@@ -2,6 +2,7 @@ package ssh_proxy
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"time"
 
@@ -114,4 +115,18 @@ func parsePrivateKey(sshHopConfig SSHHopConfig) (ssh.Signer, error) {
 	}
 
 	return signer, nil
+}
+
+// CheckPortAvailable 检查指定端口是否可用（未被占用）
+func CheckPortAvailable(port string) error {
+	if port == "" {
+		return nil // 如果端口为空，跳过检查
+	}
+
+	listener, err := net.Listen("tcp", ":"+port)
+	if err != nil {
+		return fmt.Errorf("端口 %s 已被占用: %w", port, err)
+	}
+	listener.Close()
+	return nil
 }

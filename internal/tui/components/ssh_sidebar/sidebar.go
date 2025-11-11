@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"ssh-messer/internal/config_loader"
 	"ssh-messer/internal/ssh_proxy"
 	"ssh-messer/internal/tui/components/core/layout"
 	"ssh-messer/internal/tui/styles"
@@ -177,5 +178,69 @@ func (s *sidebarCmp) generateSSHHopsPart() []string {
 		}
 	}
 
+	// 添加服务页面链接
+	if status.IsConnected {
+		serviceLinks := s.generateServiceLinks(config)
+		if len(serviceLinks) > 0 {
+			hopLines = append(hopLines, "\n")
+			hopLines = append(hopLines, strings.Repeat("─", s.width))
+			hopLines = append(hopLines, " 服务链接")
+			hopLines = append(hopLines, serviceLinks...)
+		}
+	}
+
 	return hopLines
+}
+
+// generateServiceLinks 生成服务页面链接
+func (s *sidebarCmp) generateServiceLinks(config *config_loader.TomlConfig) []string {
+	var links []string
+
+	if config == nil {
+		return links
+	}
+
+	// 遍历所有服务，收集有 pages 配置的服务
+	for _, service := range config.SSHServices {
+		if len(service.Pages) == 0 {
+			continue
+		}
+
+		// 为每个 page 生成链接
+		for _, page := range service.Pages {
+			if page.Name == nil || page.URL == nil {
+				continue
+			}
+
+			// 格式化链接显示，适配侧边栏宽度
+			linkText := fmt.Sprintf("🔗 %s", *page.Name)
+			linkURL := *page.URL
+
+			// 如果链接文本太长，截断
+			maxLinkLen := s.width - 4 // 留出边距
+			if len([]rune(linkText)) > maxLinkLen {
+				runes := []rune(linkText)
+				linkText = string(runes[:maxLinkLen-3]) + "..."
+			}
+
+			// 使用高亮颜色显示链接
+			linkDisplay := lipgloss.NewStyle().
+				Foreground(styles.NeonCyan).
+				Render(linkText)
+
+			// 如果 URL 太长，也截断显示
+			if len([]rune(linkURL)) > maxLinkLen {
+				runes := []rune(linkURL)
+				linkURL = string(runes[:maxLinkLen-3]) + "..."
+			}
+
+			links = append(links, "")
+			links = append(links, linkDisplay)
+			links = append(links, lipgloss.NewStyle().
+				Foreground(styles.Meta).
+				Render("  "+linkURL))
+		}
+	}
+
+	return links
 }
