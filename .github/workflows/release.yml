@@ -41,58 +41,92 @@ jobs:
           files: dist/*
           generate_release_notes: true
 
+  verify-archive:
+    needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.VERSION }}
+      sha256: ${{ steps.sha256.outputs.SHA256 }}
+    steps:
+      - name: Get version
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
       - name: Verify tag archive is available
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
           ARCHIVE_URL="https://github.com/ole3021/ssh-messer/archive/refs/tags/${VERSION}.tar.gz"
-
+          
           echo "Verifying tag archive availability: $ARCHIVE_URL"
-
+          
           MAX_RETRIES=30
           RETRY_COUNT=0
-          HTTP_CODE=""
-
+          ARCHIVE_AVAILABLE=false
+          
           while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$ARCHIVE_URL")
+            # Follow redirects and check final status code
+            # 302 is OK (redirect to codeload.github.com), 200 is OK, others are errors
+            HTTP_CODE=$(curl -sL -o /dev/null -w "%{http_code}" \
+              -H "User-Agent: GitHub-Actions" \
+              --max-time 30 \
+              "$ARCHIVE_URL" 2>/dev/null || echo "000")
             
-            if [ "$HTTP_CODE" = "200" ]; then
-              echo "✅ Tag archive is available! (HTTP $HTTP_CODE)"
+            # 200 = success, 302 = redirect (also success), others = error
+            if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "302" ]; then
+              echo "✅ Tag archive is available! (HTTP $HTTP_CODE - redirect is normal)"
               
-              # Verify file size (ensure not empty file)
-              CONTENT_LENGTH=$(curl -sI "$ARCHIVE_URL" | grep -i "content-length" | awk '{print $2}' | tr -d '\r')
-              if [ -n "$CONTENT_LENGTH" ] && [ "$CONTENT_LENGTH" != "0" ]; then
-                echo "✅ Archive size: $CONTENT_LENGTH bytes"
-                echo "ARCHIVE_AVAILABLE=true" >> $GITHUB_ENV
+              # Verify by actually downloading
+              TEMP_FILE=$(mktemp)
+              DOWNLOAD_SIZE=$(curl -sL -H "User-Agent: GitHub-Actions" \
+                --max-time 30 \
+                --write-out "%{size_download}" \
+                -o "$TEMP_FILE" \
+                "$ARCHIVE_URL" 2>/dev/null || echo "0")
+              
+              if [ -f "$TEMP_FILE" ] && [ "$DOWNLOAD_SIZE" -gt 100 ]; then
+                echo "✅ Archive downloaded successfully (Size: $DOWNLOAD_SIZE bytes)"
+                ARCHIVE_AVAILABLE=true
+                rm -f "$TEMP_FILE"
                 break
               else
-                echo "⚠️ Archive exists but size is 0, retrying..."
+                echo "⚠️ Archive exists but download failed or too small, retrying..."
+                rm -f "$TEMP_FILE"
               fi
             else
               RETRY_COUNT=$((RETRY_COUNT + 1))
-              echo "⏳ Attempt $RETRY_COUNT/$MAX_RETRIES: Archive not ready yet (HTTP $HTTP_CODE), waiting 10 seconds..."
-              sleep 10
+              if [ "$RETRY_COUNT" -lt "$MAX_RETRIES" ]; then
+                echo "⏳ Attempt $RETRY_COUNT/$MAX_RETRIES: Archive not ready yet (HTTP $HTTP_CODE), waiting 10 seconds..."
+                sleep 10
+              fi
             fi
           done
-
-          if [ "$HTTP_CODE" != "200" ]; then
-            echo "❌ Error: Tag archive is not available after $MAX_RETRIES attempts (HTTP $HTTP_CODE)"
+          
+          if [ "$ARCHIVE_AVAILABLE" != "true" ]; then
+            echo "❌ Error: Tag archive is not available after $MAX_RETRIES attempts"
             echo "Archive URL: $ARCHIVE_URL"
             exit 1
           fi
 
-          # Verify that the archive can be downloaded and calculate SHA256
-          echo "Verifying archive integrity..."
-          DOWNLOADED_SHA256=$(curl -sL "$ARCHIVE_URL" | shasum -a 256 | awk '{print $1}')
-          if [ -n "$DOWNLOADED_SHA256" ]; then
-            echo "✅ Archive SHA256: $DOWNLOADED_SHA256"
-            echo "ARCHIVE_SHA256=$DOWNLOADED_SHA256" >> $GITHUB_ENV
-          else
-            echo "❌ Error: Failed to calculate SHA256"
+      - name: Calculate SHA256
+        id: sha256
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          ARCHIVE_URL="https://github.com/ole3021/ssh-messer/archive/refs/tags/${VERSION}.tar.gz"
+          
+          echo "Calculating SHA256 for version $VERSION..."
+          # curl -sL automatically follows redirects
+          SHA256=$(curl -sL -H "User-Agent: GitHub-Actions" "$ARCHIVE_URL" | shasum -a 256 | awk '{print $1}')
+          
+          if [ -z "$SHA256" ] || [ "$SHA256" = "da39a3ee5e6b4b0d3255bfef95601890afd80709" ]; then
+            echo "❌ Error: Failed to calculate SHA256 or got empty file"
             exit 1
           fi
+          
+          echo "SHA256=$SHA256" >> $GITHUB_OUTPUT
+          echo "✅ SHA256: $SHA256"
 
   update-homebrew:
-    needs: build
+    needs: verify-archive
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -104,76 +138,39 @@ jobs:
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           path: homebrew-tap
 
-      - name: Get version
-        id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-
-      - name: Verify tag archive before calculating SHA256
-        run: |
-          VERSION="${{ steps.version.outputs.VERSION }}"
-          ARCHIVE_URL="https://github.com/ole3021/ssh-messer/archive/refs/tags/${VERSION}.tar.gz"
-
-          echo "Checking tag archive availability: $ARCHIVE_URL"
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$ARCHIVE_URL")
-
-          if [ "$HTTP_CODE" != "200" ]; then
-            echo "❌ Error: Tag archive is not available (HTTP $HTTP_CODE)"
-            echo "Please ensure the tag exists and GitHub has generated the archive."
-            exit 1
-          fi
-
-          echo "✅ Tag archive is available (HTTP $HTTP_CODE)"
-
-      - name: Calculate SHA256
-        id: sha256
-        run: |
-          VERSION="${{ steps.version.outputs.VERSION }}"
-          echo "Calculating SHA256 for version $VERSION..."
-
-          ARCHIVE_URL="https://github.com/ole3021/ssh-messer/archive/refs/tags/${VERSION}.tar.gz"
-          SHA256=$(curl -sL "$ARCHIVE_URL" | shasum -a 256 | awk '{print $1}')
-
-          if [ -z "$SHA256" ]; then
-            echo "❌ Error: Failed to calculate SHA256"
-            exit 1
-          fi
-
-          echo "SHA256=$SHA256" >> $GITHUB_OUTPUT
-          echo "✅ SHA256: $SHA256"
-
       - name: Update formula
         env:
-          VERSION: ${{ steps.version.outputs.VERSION }}
-          SHA256: ${{ steps.sha256.outputs.SHA256 }}
+          VERSION: ${{ needs.verify-archive.outputs.version }}
+          SHA256: ${{ needs.verify-archive.outputs.sha256 }}
         run: |
           cd homebrew-tap
           echo "Updating formula to version $VERSION with SHA256 $SHA256"
-
+          
           # Update formula file using Ruby
           ruby <<'RUBY'
           require 'fileutils'
-
+          
           formula_path = 'Formula/ssh-messer.rb'
           content = File.read(formula_path)
-
+          
           version = ENV['VERSION']
           sha256 = ENV['SHA256']
-
+          
           if version.nil? || version.empty? || sha256.nil? || sha256.empty?
             puts "Error: VERSION or SHA256 is empty"
             exit 1
           end
-
+          
           # Update URL
           content.gsub!(/url\s+"[^"]+"/, "url \"https://github.com/ole3021/ssh-messer/archive/refs/tags/#{version}.tar.gz\"")
-
+          
           # Update SHA256
           content.gsub!(/sha256\s+"[^"]+"/, "sha256 \"#{sha256}\"")
-
+          
           File.write(formula_path, content)
           puts "Formula updated successfully"
           RUBY
-
+          
           # Show updated content (for debugging)
           echo "Updated formula content:"
           cat Formula/ssh-messer.rb
@@ -183,13 +180,13 @@ jobs:
           cd homebrew-tap
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
+          
           # Check if there are changes
           if git diff --quiet Formula/ssh-messer.rb; then
             echo "No changes to commit"
             exit 0
           fi
-
+          
           git add Formula/ssh-messer.rb
-          git commit -m "Update ssh-messer to ${{ steps.version.outputs.VERSION }}"
+          git commit -m "Update ssh-messer to ${{ needs.verify-archive.outputs.version }}"
           git push
