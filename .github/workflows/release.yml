@@ -138,6 +138,21 @@ jobs:
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           path: homebrew-tap
 
+      - name: Debug - Show inputs
+        run: |
+          echo "Version from verify-archive: ${{ needs.verify-archive.outputs.version }}"
+          echo "SHA256 from verify-archive: ${{ needs.verify-archive.outputs.sha256 }}"
+          
+          if [ -z "${{ needs.verify-archive.outputs.version }}" ]; then
+            echo "❌ Error: Version is empty!"
+            exit 1
+          fi
+          
+          if [ -z "${{ needs.verify-archive.outputs.sha256 }}" ]; then
+            echo "❌ Error: SHA256 is empty!"
+            exit 1
+          fi
+
       - name: Update formula
         env:
           VERSION: ${{ needs.verify-archive.outputs.version }}
@@ -146,7 +161,11 @@ jobs:
           cd homebrew-tap
           echo "Updating formula to version $VERSION with SHA256 $SHA256"
           
-          # Update formula file using Ruby
+          # Show current formula
+          echo "Current formula before update:"
+          cat Formula/ssh-messer.rb
+          
+          # Update formula file using Ruby with improved matching
           ruby <<'RUBY'
           require 'fileutils'
           
@@ -158,22 +177,47 @@ jobs:
           
           if version.nil? || version.empty? || sha256.nil? || sha256.empty?
             puts "Error: VERSION or SHA256 is empty"
+            puts "VERSION: #{version.inspect}"
+            puts "SHA256: #{sha256.inspect}"
             exit 1
           end
           
-          # Update URL
-          content.gsub!(/url\s+"[^"]+"/, "url \"https://github.com/ole3021/ssh-messer/archive/refs/tags/#{version}.tar.gz\"")
+          puts "Updating URL to: https://github.com/ole3021/ssh-messer/archive/refs/tags/#{version}.tar.gz"
+          puts "Updating SHA256 to: #{sha256}"
           
-          # Update SHA256
-          content.gsub!(/sha256\s+"[^"]+"/, "sha256 \"#{sha256}\"")
+          # More robust URL matching - handles various formats
+          if content =~ /url\s+"[^"]+"/
+            content.gsub!(/url\s+"[^"]+"/, "url \"https://github.com/ole3021/ssh-messer/archive/refs/tags/#{version}.tar.gz\"")
+            puts "✅ URL updated"
+          else
+            puts "⚠️ Warning: Could not find URL pattern to replace"
+          end
+          
+          # More robust SHA256 matching - handles various formats including comments
+          if content =~ /sha256\s+"[^"]+"/
+            content.gsub!(/sha256\s+"[^"]+"/, "sha256 \"#{sha256}\"")
+            puts "✅ SHA256 updated"
+          elsif content =~ /sha256\s+/
+            # Handle case where sha256 line exists but format is different
+            content.gsub!(/sha256\s+.*$/, "sha256 \"#{sha256}\"")
+            puts "✅ SHA256 updated (alternative format)"
+          else
+            puts "⚠️ Warning: Could not find SHA256 pattern to replace"
+          end
           
           File.write(formula_path, content)
           puts "Formula updated successfully"
           RUBY
           
-          # Show updated content (for debugging)
+          # Show updated content
+          echo ""
           echo "Updated formula content:"
           cat Formula/ssh-messer.rb
+          
+          # Show diff
+          echo ""
+          echo "Changes made:"
+          git diff Formula/ssh-messer.rb || echo "No diff shown (file may be new)"
 
       - name: Commit and push
         run: |
@@ -181,12 +225,24 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
+          # Show git status
+          echo "Git status:"
+          git status
+          
           # Check if there are changes
           if git diff --quiet Formula/ssh-messer.rb; then
-            echo "No changes to commit"
+            echo "⚠️ No changes to commit - formula may already be up to date"
+            echo "Current formula version and SHA256:"
+            grep -E '(url|sha256)' Formula/ssh-messer.rb || true
             exit 0
           fi
           
+          echo "Staging changes..."
           git add Formula/ssh-messer.rb
+          
+          echo "Committing changes..."
           git commit -m "Update ssh-messer to ${{ needs.verify-archive.outputs.version }}"
+          
+          echo "Pushing changes..."
           git push
+          echo "✅ Formula updated and pushed successfully"
