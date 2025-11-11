@@ -56,13 +56,13 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
           ARCHIVE_URL="https://github.com/ole3021/ssh-messer/archive/refs/tags/${VERSION}.tar.gz"
-          
+
           echo "Verifying tag archive availability: $ARCHIVE_URL"
-          
+
           MAX_RETRIES=30
           RETRY_COUNT=0
           ARCHIVE_AVAILABLE=false
-          
+
           while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
             # Follow redirects and check final status code
             # 302 is OK (redirect to codeload.github.com), 200 is OK, others are errors
@@ -100,7 +100,7 @@ jobs:
               fi
             fi
           done
-          
+
           if [ "$ARCHIVE_AVAILABLE" != "true" ]; then
             echo "❌ Error: Tag archive is not available after $MAX_RETRIES attempts"
             echo "Archive URL: $ARCHIVE_URL"
@@ -112,16 +112,16 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
           ARCHIVE_URL="https://github.com/ole3021/ssh-messer/archive/refs/tags/${VERSION}.tar.gz"
-          
+
           echo "Calculating SHA256 for version $VERSION..."
           # curl -sL automatically follows redirects
           SHA256=$(curl -sL -H "User-Agent: GitHub-Actions" "$ARCHIVE_URL" | shasum -a 256 | awk '{print $1}')
-          
+
           if [ -z "$SHA256" ] || [ "$SHA256" = "da39a3ee5e6b4b0d3255bfef95601890afd80709" ]; then
             echo "❌ Error: Failed to calculate SHA256 or got empty file"
             exit 1
           fi
-          
+
           echo "SHA256=$SHA256" >> $GITHUB_OUTPUT
           echo "✅ SHA256: $SHA256"
 
@@ -142,12 +142,12 @@ jobs:
         run: |
           echo "Version from verify-archive: ${{ needs.verify-archive.outputs.version }}"
           echo "SHA256 from verify-archive: ${{ needs.verify-archive.outputs.sha256 }}"
-          
+
           if [ -z "${{ needs.verify-archive.outputs.version }}" ]; then
             echo "❌ Error: Version is empty!"
             exit 1
           fi
-          
+
           if [ -z "${{ needs.verify-archive.outputs.sha256 }}" ]; then
             echo "❌ Error: SHA256 is empty!"
             exit 1
@@ -160,60 +160,50 @@ jobs:
         run: |
           cd homebrew-tap
           echo "Updating formula to version $VERSION with SHA256 $SHA256"
-          
+
           # Show current formula
           echo "Current formula before update:"
           cat Formula/ssh-messer.rb
-          
+
           # Update formula file using Ruby with improved matching
           ruby <<'RUBY'
           require 'fileutils'
-          
+
           formula_path = 'Formula/ssh-messer.rb'
           content = File.read(formula_path)
-          
+
           version = ENV['VERSION']
           sha256 = ENV['SHA256']
-          
+
           if version.nil? || version.empty? || sha256.nil? || sha256.empty?
             puts "Error: VERSION or SHA256 is empty"
             puts "VERSION: #{version.inspect}"
             puts "SHA256: #{sha256.inspect}"
             exit 1
           end
-          
+
           puts "Updating URL to: https://github.com/ole3021/ssh-messer/archive/refs/tags/#{version}.tar.gz"
           puts "Updating SHA256 to: #{sha256}"
-          
-          # More robust URL matching - handles various formats
-          if content =~ /url\s+"[^"]+"/
-            content.gsub!(/url\s+"[^"]+"/, "url \"https://github.com/ole3021/ssh-messer/archive/refs/tags/#{version}.tar.gz\"")
-            puts "✅ URL updated"
-          else
-            puts "⚠️ Warning: Could not find URL pattern to replace"
-          end
-          
-          # More robust SHA256 matching - handles various formats including comments
-          if content =~ /sha256\s+"[^"]+"/
-            content.gsub!(/sha256\s+"[^"]+"/, "sha256 \"#{sha256}\"")
-            puts "✅ SHA256 updated"
-          elsif content =~ /sha256\s+/
-            # Handle case where sha256 line exists but format is different
-            content.gsub!(/sha256\s+.*$/, "sha256 \"#{sha256}\"")
-            puts "✅ SHA256 updated (alternative format)"
-          else
-            puts "⚠️ Warning: Could not find SHA256 pattern to replace"
-          end
-          
+
+          # Remove all existing url lines and add new one
+          content.gsub!(/^\s*url\s+"[^"]+".*$/, '')
+          # Find the position after homepage and insert url
+          content.gsub!(/(homepage\s+"[^"]+"\s*\n)/, "\\1  url \"https://github.com/ole3021/ssh-messer/archive/refs/tags/#{version}.tar.gz\"\n")
+
+          # Remove all existing sha256 lines and add new one
+          content.gsub!(/^\s*sha256\s+"[^"]+".*$/, '')
+          # Find the position after url and insert sha256
+          content.gsub!(/(url\s+"[^"]+"\s*\n)/, "\\1  sha256 \"#{sha256}\"\n")
+
           File.write(formula_path, content)
           puts "Formula updated successfully"
           RUBY
-          
+
           # Show updated content
           echo ""
           echo "Updated formula content:"
           cat Formula/ssh-messer.rb
-          
+
           # Show diff
           echo ""
           echo "Changes made:"
@@ -224,11 +214,11 @@ jobs:
           cd homebrew-tap
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          
+
           # Show git status
           echo "Git status:"
           git status
-          
+
           # Check if there are changes
           if git diff --quiet Formula/ssh-messer.rb; then
             echo "⚠️ No changes to commit - formula may already be up to date"
@@ -236,13 +226,13 @@ jobs:
             grep -E '(url|sha256)' Formula/ssh-messer.rb || true
             exit 0
           fi
-          
+
           echo "Staging changes..."
           git add Formula/ssh-messer.rb
-          
+
           echo "Committing changes..."
           git commit -m "Update ssh-messer to ${{ needs.verify-archive.outputs.version }}"
-          
+
           echo "Pushing changes..."
           git push
           echo "✅ Formula updated and pushed successfully"
