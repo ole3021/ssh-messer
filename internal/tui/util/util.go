@@ -2,6 +2,7 @@ package util
 
 import (
 	"log/slog"
+	"net"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea/v2"
@@ -61,3 +62,17 @@ type (
 	}
 	ClearStatusMsg struct{}
 )
+
+// CheckPortAvailable 检查端口是否可用
+func CheckPortAvailable(port string) error {
+	if port == "" {
+		return nil
+	}
+
+	listener, err := net.Listen("tcp", ":"+port)
+	if err != nil {
+		return err
+	}
+	listener.Close()
+	return nil
+}

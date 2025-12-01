@@ -48,7 +48,7 @@ func (s *statusBarCmp) Update(msg tea.Msg) (util.Model, tea.Cmd) {
 }
 
 func (s *statusBarCmp) View() string {
-	if s.appState == nil || s.appState.CurrentConfigName == "" {
+	if s.appState == nil || s.appState.CurrentConfigFileName == "" {
 		return "No configuration selected"
 	}
 
@@ -57,22 +57,12 @@ func (s *statusBarCmp) View() string {
 		return "Error: " + s.appState.Error.Error.Error()
 	}
 
-	proxy := s.appState.GetSSHProxy(s.appState.CurrentConfigName)
+	proxy := s.appState.GetMesserHops(s.appState.CurrentConfigFileName)
 	if proxy == nil {
 		return "SSH Proxy not initialized"
 	}
 
-	status := proxy.Status
-	var statusText string
-
-	if status.CurrentInfo != "" {
-		statusText = status.CurrentInfo
-	}
-	if status.LastError != nil {
-		statusText = "Error: " + status.LastError.Error()
-	}
-
-	return statusText
+	return proxy.CurrentInfo
 }
 
 func (s *statusBarCmp) SetSize(width, height int) tea.Cmd {

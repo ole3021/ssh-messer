@@ -6,4 +6,5 @@ var (
 	Version    = "v0.2.8"
 	License    = "MIT"
 	Repository = "https://github.com/ole3021/ssh-messer"
+	Email      = "ole3021@gmail.com"
 )

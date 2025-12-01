@@ -1,8 +1,6 @@
 package ssh_messer
 
 import (
-	"ssh-messer/internal/pubsub"
-	"ssh-messer/internal/ssh_proxy"
 	"ssh-messer/internal/tui/components/ssh_logs"
 	"ssh-messer/internal/tui/components/ssh_sidebar"
 	"ssh-messer/internal/tui/components/ssh_statusbar"
@@ -33,7 +31,6 @@ type sshMesserPage struct {
 
 	compact bool
 
-	// Cmponents
 	compStatusBar ssh_statusbar.StatusBarCmp
 	compSidebar   ssh_sidebar.SidebarCmp
 	compLogs      ssh_logs.LogsCmp
@@ -54,6 +51,7 @@ func New(appState *types.AppState, uiState *types.UIState) SSHMesserPage {
 }
 
 func (p *sshMesserPage) Init() tea.Cmd {
+	// p.appState.EventsCancel()
 	return tea.Batch(
 		p.compStatusBar.Init(),
 		p.compSidebar.Init(),
@@ -66,6 +64,7 @@ func (p *sshMesserPage) Update(msg tea.Msg) (util.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		// Components size managed by view model.
 		p.handleCompactMode(msg.Width, msg.Height)
 
 		statusBarHeight := StatusBarHeight
@@ -83,36 +82,9 @@ func (p *sshMesserPage) Update(msg tea.Msg) (util.Model, tea.Cmd) {
 		}
 
 		return p, tea.Batch(p.compLogs.SetSize(logsWidth, logsHeight), p.compSidebar.SetSize(sidebarWidth, sidebarHeight), p.compStatusBar.SetSize(statusBarWidth, statusBarHeight))
-
-	case pubsub.Event[ssh_proxy.SSHStatusUpdateEvent]:
-		// SSH 状态更新需要更新状态栏和侧边栏
-		var cmds []tea.Cmd
-		s, cmd := p.compStatusBar.Update(msg)
-		if updatedStatusBar, ok := s.(ssh_statusbar.StatusBarCmp); ok {
-			p.compStatusBar = updatedStatusBar
-		}
-		cmds = append(cmds, cmd)
-
-		s, cmd = p.compSidebar.Update(msg)
-		if updatedSidebar, ok := s.(ssh_sidebar.SidebarCmp); ok {
-			p.compSidebar = updatedSidebar
-		}
-		cmds = append(cmds, cmd)
-		return p, tea.Batch(cmds...)
-
-	case pubsub.Event[ssh_proxy.ServiceProxyLogEvent]:
-		// Service Proxy 日志事件只传递给日志组件
-		s, cmd := p.compLogs.Update(msg)
-		if updatedLogs, ok := s.(ssh_logs.LogsCmp); ok {
-			p.compLogs = updatedLogs
-		}
-		return p, cmd
-
-	default:
-		cmds = append(cmds, p.updateAllComponents(msg)...)
 	}
 
-	return p, tea.Batch(cmds...)
+	return p, tea.Batch(append(cmds, p.updateAllComponents(msg)...)...)
 }
 
 func (p *sshMesserPage) View() string {
@@ -157,7 +129,6 @@ func (p *sshMesserPage) handleCompactMode(width, height int) {
 	}
 }
 
-// updateAllComponents 统一更新所有组件
 func (p *sshMesserPage) updateAllComponents(msg tea.Msg) []tea.Cmd {
 	var cmds []tea.Cmd
 

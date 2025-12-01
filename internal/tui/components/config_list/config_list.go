@@ -2,7 +2,7 @@ package config_list
 
 import (
 	"fmt"
-	"ssh-messer/internal/config_loader"
+	"ssh-messer/internal/config"
 	"ssh-messer/internal/tui/commands"
 	"ssh-messer/internal/tui/components/core/layout"
 	"ssh-messer/internal/tui/messages"
@@ -13,18 +13,19 @@ import (
 	tea "github.com/charmbracelet/bubbletea/v2"
 )
 
-// // Item 实现 list.Item 接口
+// use bubbletea list
+// TODO: Separate bubbletea list into a separate file
 type ConfigItem struct {
 	filename string
-	config   *config_loader.TomlConfig
+	config   *config.MesserConfig
 }
 
 func (i ConfigItem) Title() string {
-	if i.config.Name == nil {
+	if i.config.Name == "" {
 		return strings.ReplaceAll(i.filename, ".toml", "")
 	}
 
-	return *i.config.Name
+	return i.config.Name
 }
 
 func (i ConfigItem) Description() string {
@@ -33,18 +34,18 @@ func (i ConfigItem) Description() string {
 	}
 
 	httpPort := "N/A"
-	if i.config.LocalHttpPort != nil {
-		httpPort = *i.config.LocalHttpPort
+	if i.config.LocalHttpPort != "" {
+		httpPort = i.config.LocalHttpPort
 	}
 
 	dockerPort := "N/A"
-	if i.config.LocalDockerPort != nil {
-		dockerPort = *i.config.LocalDockerPort
+	if i.config.LocalDockerPort != "" {
+		dockerPort = i.config.LocalDockerPort
 	}
 
 	return fmt.Sprintf("%2d Hops🦘, %3d Services🔗, LocalPort🕸️: %4s, DockerPort🐳: %s",
 		len(i.config.SSHHops),
-		len(i.config.SSHServices),
+		len(i.config.ReverseServices),
 		httpPort,
 		dockerPort)
 }
@@ -53,19 +54,17 @@ func (c ConfigItem) FilterValue() string {
 	return c.filename
 }
 
-// ConfigListCmp 配置列表组件接口
 type ConfigListCmp interface {
 	util.Model
 	layout.Sizeable
 }
 
-// configListCmp 配置列表组件实现
 type configListCmp struct {
 	width, height int
 	list          list.Model
 }
 
-func New() ConfigListCmp {
+func NewConfigListCmp() ConfigListCmp {
 	items := []list.Item{}
 	l := list.New(items, list.NewDefaultDelegate(), 0, 0)
 	l.SetShowHelp(false)
@@ -82,13 +81,12 @@ func New() ConfigListCmp {
 }
 
 func (c *configListCmp) Init() tea.Cmd {
-	return commands.LoadAllConfigs()
+	return commands.LoadAllConfigsCmd()
 }
 
-// Update 处理消息更新
 func (c *configListCmp) Update(msg tea.Msg) (util.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case messages.LoadConfigsMsg:
+	case messages.ConfigLoadedMsg:
 		if msg.Err != nil {
 			return c, util.ReportError(msg.Err)
 		}
@@ -108,13 +106,14 @@ func (c *configListCmp) Update(msg tea.Msg) (util.Model, tea.Cmd) {
 		if msg.String() == "enter" {
 			selectedItem := c.list.SelectedItem()
 			if item, ok := selectedItem.(ConfigItem); ok {
-				return c, util.CmdHandler(messages.ConfigSelectedMsg{
-					ConfigName: item.filename,
+				return c, util.CmdHandler(messages.SSHStartConnectMsg{
+					ConfigFileName: item.filename,
 				})
 			}
 		}
 	}
 
+	// process bubbletea list update
 	var cmd tea.Cmd
 	c.list, cmd = c.list.Update(msg)
 	return c, cmd

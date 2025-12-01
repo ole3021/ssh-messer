@@ -1,16 +1,17 @@
 package commands
 
 import (
-	"ssh-messer/internal/config_loader"
+	"ssh-messer/internal/config"
 	"ssh-messer/internal/tui/messages"
+	"ssh-messer/pkg"
 
 	tea "github.com/charmbracelet/bubbletea/v2"
 )
 
-// LoadAllConfigs 加载所有配置（系统配置 + TOML 配置）
-func LoadAllConfigs() tea.Cmd {
+func LoadAllConfigsCmd() tea.Cmd {
+	pkg.Logger.Trace().Msg("[Commands] LoadAllConfigsCmd Start")
 	return func() tea.Msg {
-		configs, err := config_loader.LoadTomlConfigsFromHomeDir()
+		configs, err := config.LoadTomlConfigsFromHomeDir()
 		if err != nil {
 			return messages.AppErrMsg{
 				Error:   err,
@@ -18,7 +19,8 @@ func LoadAllConfigs() tea.Cmd {
 			}
 		}
 
-		return messages.LoadConfigsMsg{
+		pkg.Logger.Info().Int("configs_count", len(configs)).Msg("[Commands] LoadAllConfigsCmd Completed")
+		return messages.ConfigLoadedMsg{
 			Configs: configs,
 			Err:     nil,
 		}

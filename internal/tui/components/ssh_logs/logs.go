@@ -4,9 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"ssh-messer/internal/pubsub"
-	"ssh-messer/internal/ssh_proxy"
 	"ssh-messer/internal/tui/components/core/layout"
+	"ssh-messer/internal/tui/messages"
 	"ssh-messer/internal/tui/types"
 	"ssh-messer/internal/tui/util"
 
@@ -103,18 +102,22 @@ func (l *logsCmp) Update(msg tea.Msg) (util.Model, tea.Cmd) {
 		l.viewport = updatedViewport
 		return l, cmd
 
-	case pubsub.Event[ssh_proxy.ServiceProxyLogEvent]:
-		// 处理 Service Proxy 日志事件
-		event := msg.Payload
-		logText := l.formatServiceProxyLog(event)
-
-		// 如果是更新事件，更新已有日志；否则添加新日志
-		if event.IsUpdate {
-			cmd = l.UpdateLog(event.RequestID, logText)
-		} else {
-			cmd = l.AddLogWithID(event.RequestID, logText)
-		}
+	case messages.SSHServiceProxyLogMsg:
+		logText := l.formatServiceProxyLog(msg)
+		cmd = l.AddLogWithID(msg.RequestID, logText)
 		return l, cmd
+		// case pubsub.Event[ssh_proxy.ServiceProxyLogEvent]:
+		// 	// 处理 Service Proxy 日志事件
+		// 	event := msg.Payload
+		// 	logText := l.formatServiceProxyLog(event)
+
+		// 	// 如果是更新事件，更新已有日志；否则添加新日志
+		// 	if event.IsUpdate {
+		// 		cmd = l.UpdateLog(event.RequestID, logText)
+		// 	} else {
+		// 		cmd = l.AddLogWithID(event.RequestID, logText)
+		// 	}
+		// 	return l, cmd
 	}
 
 	// 将其他事件传递给 viewport
@@ -249,26 +252,25 @@ func (l *logsCmp) GetSize() (int, int) {
 
 // formatServiceProxyLog 格式化 service proxy 日志，限制长度不超过日志窗口宽度
 // 如果有错误消息，错误消息显示在下一行
-func (l *logsCmp) formatServiceProxyLog(event ssh_proxy.ServiceProxyLogEvent) string {
+func (l *logsCmp) formatServiceProxyLog(msg messages.SSHServiceProxyLogMsg) string {
 	logsWidth := l.width
 	if logsWidth <= 0 {
 		logsWidth = 80 // 默认宽度
 	}
 
-	// 基础格式：[ServiceAlias] Method URL -> StatusCode (ResponseSize bytes)
+	// 基础格式：[Method] URL -> StatusCode (Duration)
 	// 估算基础文本长度（不包括 URL）
-	baseText := fmt.Sprintf("[%s] %s ", event.ServiceAlias, event.Method)
+	baseText := fmt.Sprintf("[%s] ", msg.Method)
 	baseTextLen := len([]rune(baseText))
 
 	// 根据状态码格式化后缀
 	var suffixText string
-	if event.StatusCode == 0 {
+	if msg.StatusCode == 0 {
 		// StatusCode 为 0 表示请求中
 		suffixText = " -> pending..."
 	} else {
-		// 格式化用时信息，单位是秒（s），保留3位小数
-		durationSec := event.Duration.Seconds()
-		suffixText = fmt.Sprintf(" <> %d (%d bytes) %.3fs", event.StatusCode, event.ResponseSize, durationSec)
+		// 格式化状态码和用时信息
+		suffixText = fmt.Sprintf(" -> %d (%s)", msg.StatusCode, msg.Duration)
 	}
 	suffixTextLen := len([]rune(suffixText))
 
@@ -276,7 +278,7 @@ func (l *logsCmp) formatServiceProxyLog(event ssh_proxy.ServiceProxyLogEvent) st
 	maxURLLen := logsWidth - baseTextLen - suffixTextLen - ellipsisLength // 预留省略号长度
 
 	// 如果 URL 太长，截断它
-	url := util.TruncateString(event.URL, maxURLLen)
+	url := util.TruncateString(msg.URL, maxURLLen)
 
 	logText := baseText + url + suffixText
 
@@ -284,9 +286,9 @@ func (l *logsCmp) formatServiceProxyLog(event ssh_proxy.ServiceProxyLogEvent) st
 	logText = util.TruncateString(logText, logsWidth)
 
 	// 如果有错误消息，将其添加到下一行
-	if event.ErrorMessage != "" {
+	if msg.Error != nil {
 		// 截断错误消息以适应窗口宽度
-		errorMsg := util.TruncateString(event.ErrorMessage, logsWidth)
+		errorMsg := util.TruncateString(msg.Error.Error(), logsWidth)
 		logText += "\n" + errorMsg
 	}
 

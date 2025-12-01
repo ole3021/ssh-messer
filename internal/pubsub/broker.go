@@ -7,21 +7,21 @@ import (
 
 const bufferSize = 64
 
-type Broker[T any] struct {
-	subs      map[chan Event[T]]struct{}
+type Broker[E ~string, T any] struct {
+	subs      map[chan Event[E, T]]struct{}
 	mu        sync.RWMutex
 	done      chan struct{}
 	subCount  int
 	maxEvents int
 }
 
-func NewBroker[T any]() *Broker[T] {
-	return NewBrokerWithOptions[T](bufferSize, 1000)
+func NewBroker[E ~string, T any]() *Broker[E, T] {
+	return NewBrokerWithOptions[E, T](bufferSize, 1000)
 }
 
-func NewBrokerWithOptions[T any](channelBufferSize, maxEvents int) *Broker[T] {
-	b := &Broker[T]{
-		subs:      make(map[chan Event[T]]struct{}),
+func NewBrokerWithOptions[E ~string, T any](channelBufferSize, maxEvents int) *Broker[E, T] {
+	b := &Broker[E, T]{
+		subs:      make(map[chan Event[E, T]]struct{}),
 		done:      make(chan struct{}),
 		subCount:  0,
 		maxEvents: maxEvents,
@@ -29,7 +29,7 @@ func NewBrokerWithOptions[T any](channelBufferSize, maxEvents int) *Broker[T] {
 	return b
 }
 
-func (b *Broker[T]) Shutdown() {
+func (b *Broker[E, T]) Shutdown() {
 	select {
 	case <-b.done: // Already closed
 		return
@@ -48,19 +48,19 @@ func (b *Broker[T]) Shutdown() {
 	b.subCount = 0
 }
 
-func (b *Broker[T]) Subscribe(ctx context.Context) <-chan Event[T] {
+func (b *Broker[E, T]) Subscribe(ctx context.Context) <-chan Event[E, T] {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	select {
 	case <-b.done:
-		ch := make(chan Event[T])
+		ch := make(chan Event[E, T])
 		close(ch)
 		return ch
 	default:
 	}
 
-	sub := make(chan Event[T], bufferSize)
+	sub := make(chan Event[E, T], bufferSize)
 	b.subs[sub] = struct{}{}
 	b.subCount++
 
@@ -84,13 +84,13 @@ func (b *Broker[T]) Subscribe(ctx context.Context) <-chan Event[T] {
 	return sub
 }
 
-func (b *Broker[T]) GetSubscriberCount() int {
+func (b *Broker[E, T]) GetSubscriberCount() int {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	return b.subCount
 }
 
-func (b *Broker[T]) Publish(t EventType, payload T) {
+func (b *Broker[E, T]) Publish(t E, payload T) {
 	b.mu.RLock()
 	select {
 	case <-b.done:
@@ -99,13 +99,13 @@ func (b *Broker[T]) Publish(t EventType, payload T) {
 	default:
 	}
 
-	subscribers := make([]chan Event[T], 0, len(b.subs))
+	subscribers := make([]chan Event[E, T], 0, len(b.subs))
 	for sub := range b.subs {
 		subscribers = append(subscribers, sub)
 	}
 	b.mu.RUnlock()
 
-	event := Event[T]{Type: t, Payload: payload}
+	event := Event[E, T]{Type: t, Payload: payload}
 
 	for _, sub := range subscribers {
 		select {

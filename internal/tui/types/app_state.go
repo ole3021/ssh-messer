@@ -1,70 +1,71 @@
 package types
 
 import (
-	"ssh-messer/internal/config_loader"
-	"ssh-messer/internal/ssh_proxy"
+	"ssh-messer/internal/config"
+	"ssh-messer/internal/messer"
 )
 
-// AppState 应用状态
 type AppState struct {
-	// 配置相关
-	Configs           map[string]*config_loader.TomlConfig
-	CurrentConfigName string
-	SSHProxies        map[string]*ssh_proxy.SSHHopsProxy
+	Configs               map[string]*config.MesserConfig
+	CurrentConfigFileName string
+	MesserHops            map[string]*messer.MesserHops
 
-	// APP Error
 	Error AppError
 }
 
-// NewAppState 创建新的应用状态
 func NewAppState() *AppState {
 	return &AppState{
-		Configs:    make(map[string]*config_loader.TomlConfig),
-		SSHProxies: make(map[string]*ssh_proxy.SSHHopsProxy),
+		Configs:    make(map[string]*config.MesserConfig),
+		MesserHops: make(map[string]*messer.MesserHops),
 	}
 }
 
-// SetConfigs 设置配置信息
-func (s *AppState) SetConfigs(configs map[string]*config_loader.TomlConfig) {
+func (s *AppState) SetConfigs(configs map[string]*config.MesserConfig) {
 	s.Configs = configs
 }
 
-// GetConfigs 获取配置信息
-func (s *AppState) GetConfigs() map[string]*config_loader.TomlConfig {
+func (s *AppState) GetConfigs() map[string]*config.MesserConfig {
 	return s.Configs
 }
 
-func (s *AppState) UpSetConfig(configName string, config *config_loader.TomlConfig) {
+func (s *AppState) UpSetConfig(configName string, config *config.MesserConfig) {
 	s.Configs[configName] = config
 }
 
-func (s *AppState) GetConfig(configName string) *config_loader.TomlConfig {
+func (s *AppState) GetConfig(configName string) *config.MesserConfig {
 	return s.Configs[configName]
 }
 
-// GetCurrentConfig 获取当前配置
-func (s *AppState) GetCurrentConfig() *config_loader.TomlConfig {
-	return s.Configs[s.CurrentConfigName]
+func (s *AppState) GetCurrentConfig() *config.MesserConfig {
+	return s.Configs[s.CurrentConfigFileName]
 }
 
-func (s *AppState) SetCurrentConfigName(configName string) {
-	s.CurrentConfigName = configName
+func (s *AppState) SetCurrentConfigFileName(configName string) {
+	s.CurrentConfigFileName = configName
 }
 
-// SetSSHProxy 设置 SSH 代理
-func (s *AppState) SetSSHProxy(configName string, sshProxy *ssh_proxy.SSHHopsProxy) {
-	s.SSHProxies[configName] = sshProxy
+func (s *AppState) UpSetMesserHops(configName string, messerHops *messer.MesserHops) {
+	s.MesserHops[configName] = messerHops
 }
 
-// GetSSHProxy 获取 SSH 代理
-func (s *AppState) GetSSHProxy(configName string) *ssh_proxy.SSHHopsProxy {
-	if proxy, exists := s.SSHProxies[configName]; exists {
+func (s *AppState) GetMesserHops(configName string) *messer.MesserHops {
+	if proxy, exists := s.MesserHops[configName]; exists {
 		return proxy
 	}
 	return nil
 }
 
-// AppError 应用错误消息
+func (s *AppState) SetAppError(error error, isFatal bool) {
+	s.Error = AppError{
+		Error:   error,
+		IsFatal: isFatal,
+	}
+}
+
+func (s *AppState) GetAppError() *AppError {
+	return &s.Error
+}
+
 type AppError struct {
 	Error   error
 	IsFatal bool

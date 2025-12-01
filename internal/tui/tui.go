@@ -2,14 +2,10 @@ package tui
 
 import (
 	"context"
-	"fmt"
-	"os"
 	"sync"
 
-	"ssh-messer/internal/pubsub"
-	"ssh-messer/internal/ssh_proxy"
+	"ssh-messer/internal/messer"
 	"ssh-messer/internal/tui/commands"
-	"ssh-messer/internal/tui/components/core/status"
 	"ssh-messer/internal/tui/messages"
 	"ssh-messer/internal/tui/page/ssh_messer"
 	"ssh-messer/internal/tui/page/welcome"
@@ -19,193 +15,130 @@ import (
 
 	"github.com/charmbracelet/bubbles/v2/key"
 	tea "github.com/charmbracelet/bubbletea/v2"
-	"github.com/charmbracelet/lipgloss/v2"
 )
 
-// appModel represents the main application model that manages pages and UI state.
 type appModel struct {
 	keyMap KeyMap
 
 	// Pages State
-	currentPage  messages.PageID
-	previousPage messages.PageID
-	pages        map[messages.PageID]util.Model
-	loadedPages  map[messages.PageID]bool
-
-	// Status
-	status status.StatusCmp
+	currentPage  types.PageID
+	previousPage types.PageID
+	pages        map[types.PageID]util.Model
+	loadedPages  map[types.PageID]bool
 
 	// State
 	appState *types.AppState
 	uiState  *types.UIState
 
-	// SSH status updates via pubsub
-	events          chan tea.Msg
-	eventsCtx       context.Context
-	eventsCancel    context.CancelFunc
-	serviceEventsWG *sync.WaitGroup
+	// TODO: Tidy, Program init in subscribe, used to send messages to the program.
+	program        *tea.Program
+	EventsCtx      context.Context
+	EventsCancel   context.CancelFunc
+	EventsCancelWG *sync.WaitGroup
 }
 
-// Init initializes the application model and returns initial commands.
+// New creates and initializes a new TUI application model.
+func New() *appModel {
+	appState := types.NewAppState()
+	uiState := types.NewUIState()
+	ctx, cancel := context.WithCancel(context.Background())
+
+	model := &appModel{
+		currentPage:  types.WelcomePageID,
+		previousPage: types.WelcomePageID,
+
+		loadedPages: make(map[types.PageID]bool),
+		keyMap:      DefaultKeyMap(),
+
+		appState: appState,
+		uiState:  uiState,
+
+		EventsCtx:      ctx,
+		EventsCancel:   cancel,
+		EventsCancelWG: &sync.WaitGroup{},
+
+		pages: map[types.PageID]util.Model{
+			types.WelcomePageID:   welcome.New(appState, uiState),
+			types.SSHMesserPageID: ssh_messer.New(appState, uiState),
+		},
+	}
+
+	return model
+}
+
 func (a *appModel) Init() tea.Cmd {
-	item, ok := a.pages[a.currentPage]
+	page, ok := a.pages[a.currentPage]
 	if !ok {
 		return nil
 	}
 
 	var cmds []tea.Cmd
-
-	// 加载配置（系统配置 + TOML 配置）
-	cmds = append(cmds, commands.LoadAllConfigs())
-
-	// 初始化当前页面
-	cmd := item.Init()
+	cmd := page.Init()
 	cmds = append(cmds, cmd)
+	// TODO: Combine loadedPages to pages map.
 	a.loadedPages[a.currentPage] = true
-
-	// 初始化状态栏
-	cmd = a.status.Init()
-	cmds = append(cmds, cmd)
 
 	return tea.Batch(cmds...)
 }
 
-// Update handles incoming messages and updates the application state.
 func (a *appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		a.uiState.Width, a.uiState.Height = msg.Width, msg.Height
-		return a, a.handleWindowResize(msg.Width, msg.Height)
-
-	// Page change messages
-	case messages.PageChangeMsg:
-		return a, a.moveToPage(msg.ID)
-
-	// Status Messages
-	case util.InfoMsg, util.ClearStatusMsg:
-		s, statusCmd := a.status.Update(msg)
-		a.status = s.(status.StatusCmp)
-		cmds = append(cmds, statusCmd)
-		return a, tea.Batch(cmds...)
-
-	// Configuration messages
-	case messages.LoadConfigsMsg:
-		// 处理配置加载消息
-		if msg.Err != nil {
-			return a, util.ReportError(msg.Err)
+	case tea.KeyMsg:
+		if key.Matches(msg, a.keyMap.Quit) {
+			return a, tea.Quit
 		}
-		// 更新应用状态
+
+	case tea.WindowSizeMsg:
+		for _, page := range a.pages {
+			// Delegate msg to sub model with window size msg.
+			subCmds := util.DelegateMsgToSubModel(cmds, msg, &page)
+			cmds = append(cmds, subCmds...)
+		}
+
+	case messages.ConfigLoadedMsg:
+		if msg.Err != nil {
+			return a, commands.ReportAppErrCmd(ErrConfigNotFound, false)
+		}
+		// Save configs to app state
 		a.appState.SetConfigs(msg.Configs)
-		// 消息需要传递到当前页面，所以继续执行，不 return
-	case messages.ConfigSelectedMsg:
-		model, cmd := a.handleConfigSelectedMsg(msg)
-		return model, cmd
+		// Don't return , ConfigList Component will handle the same message.
+
+	case messages.SSHStartConnectMsg:
+		a.appState.SetCurrentConfigFileName(msg.ConfigFileName)
+		// Create and start messer hop connect
+		config := a.appState.GetConfig(msg.ConfigFileName)
+		if config == nil {
+			return a, commands.ReportAppErrCmd(ErrConfigNotFound, false)
+		}
+		messerHop := messer.NewMesserHops(config, a.EventsCtx)
+		go messerHop.ConnectHops()
+		a.appState.UpSetMesserHops(msg.ConfigFileName, messerHop)
+		// Subscribe to messer events
+		go a.subscribeMesserEvents(msg.ConfigFileName, messerHop.SubCh)
+
+		a.moveToPage(types.SSHMesserPageID)
+		return a, nil
 
 	// App error
 	case messages.AppErrMsg:
 		model, cmd := a.handleAppErrorMsg(msg)
 		return model, cmd
-
-	// SSH status updates via pubsub
-	case pubsub.Event[types.EveSSHStatusUpdate]:
-		model, cmd := a.handleSSHStatusUpdate(msg)
-		return model, cmd
-
-	// Service proxy log events via pubsub
-	case pubsub.Event[ssh_proxy.ServiceProxyLogEvent]:
-		// Forward to current page
-		item, ok := a.pages[a.currentPage]
-		if !ok {
-			return a, nil
-		}
-		updated, cmd := item.Update(msg)
-		a.pages[a.currentPage] = updated
-		return a, cmd
-
-	case tea.KeyMsg:
-		return a, a.handleKeyPressMsg(msg)
 	}
 
-	// Update status bar
-	s, _ := a.status.Update(msg)
-	a.status = s.(status.StatusCmp)
-
-	// Delegate to current page
-	item, ok := a.pages[a.currentPage]
-	if !ok {
-		return a, nil
-	}
-
-	updated, cmd := item.Update(msg)
-	a.pages[a.currentPage] = updated
-	cmds = append(cmds, cmd)
-
-	return a, tea.Batch(cmds...)
+	// Delegate msg to current page.
+	currentPage := a.pages[a.currentPage]
+	return a, tea.Batch(util.DelegateMsgToSubModel(cmds, msg, &currentPage)...)
 }
 
-// View renders the complete application interface including pages and status bar.
+// Render view from view model.
 func (a *appModel) View() string {
-	page := a.pages[a.currentPage]
-	pageView := page.View()
-
-	// 组合页面视图和状态栏
-	components := []string{
-		pageView,
-	}
-	if a.status != nil {
-		components = append(components, a.status.View())
-	}
-
-	return lipgloss.JoinVertical(lipgloss.Top, components...)
-}
-
-// handleWindowResize processes window resize events and updates all components.
-func (a *appModel) handleWindowResize(width, height int) tea.Cmd {
-	var cmds []tea.Cmd
-
-	// Update uiState instead of local fields
-	a.uiState.Width = width
-	a.uiState.Height = height
-
-	// Update status bar
-	s, cmd := a.status.Update(tea.WindowSizeMsg{Width: width, Height: height})
-	if model, ok := s.(status.StatusCmp); ok {
-		a.status = model
-	}
-	cmds = append(cmds, cmd)
-
-	// Update all pages
-	for p, page := range a.pages {
-		updated, pageCmd := page.Update(tea.WindowSizeMsg{Width: width, Height: height})
-		a.pages[p] = updated
-		cmds = append(cmds, pageCmd)
-	}
-
-	return tea.Batch(cmds...)
-}
-
-// handleKeyPressMsg processes keyboard input and routes to appropriate handlers.
-func (a *appModel) handleKeyPressMsg(msg tea.KeyMsg) tea.Cmd {
-	// Check this first as the user should be able to quit no matter what.
-	if key.Matches(msg, a.keyMap.Quit) {
-		return tea.Quit
-	}
-
-	// Delegate to current page
-	item, ok := a.pages[a.currentPage]
-	if !ok {
-		return nil
-	}
-
-	updated, cmd := item.Update(msg)
-	a.pages[a.currentPage] = updated
-	return cmd
+	return a.pages[a.currentPage].View()
 }
 
 // moveToPage handles navigation between different pages in the application.
-func (a *appModel) moveToPage(pageID messages.PageID) tea.Cmd {
+func (a *appModel) moveToPage(pageID types.PageID) tea.Cmd {
 	var cmds []tea.Cmd
 
 	// Lazy load page if not loaded
@@ -234,31 +167,8 @@ func (a *appModel) moveToPage(pageID messages.PageID) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// handleLoadConfigsMsg handles configuration loading messages
-func (a *appModel) handleLoadConfigsMsg(msg messages.LoadConfigsMsg) (tea.Model, tea.Cmd) {
-	if msg.Err != nil {
-		return a, util.ReportError(msg.Err)
-	}
-
-	// Update app state with loaded configs
-	a.appState.SetConfigs(msg.Configs)
-	return a, nil
-}
-
-// handleConfigSelectedMsg handles configuration selection messages
-func (a *appModel) handleConfigSelectedMsg(msg messages.ConfigSelectedMsg) (tea.Model, tea.Cmd) {
-	a.appState.CurrentConfigName = msg.ConfigName
-
-	var cmds []tea.Cmd
-	// 切换到 SSH Messer 页面
-	cmds = append(cmds, util.CmdHandler(messages.PageChangeMsg{ID: messages.SSHMesserPageID}))
-	// 初始化 SSH 代理
-	cmds = append(cmds, commands.InitSSHProxy(a.appState, msg.ConfigName))
-
-	return a, tea.Batch(cmds...)
-}
-
 // handleAppErrorMsg handles application error messages
+// TODO: Handling app error message.
 func (a *appModel) handleAppErrorMsg(appErr messages.AppErrMsg) (tea.Model, tea.Cmd) {
 	a.appState.Error = types.AppError{
 		Error:   appErr.Error,
@@ -270,78 +180,25 @@ func (a *appModel) handleAppErrorMsg(appErr messages.AppErrMsg) (tea.Model, tea.
 	return a, util.ReportError(appErr.Error)
 }
 
-// handleSSHStatusUpdate handles SSH status updates from pubsub
-func (a *appModel) handleSSHStatusUpdate(event pubsub.Event[types.EveSSHStatusUpdate]) (tea.Model, tea.Cmd) {
-	update := event.Payload
-	proxy := a.appState.GetSSHProxy(update.ConfigName)
-	if proxy == nil {
-		pkg.Logger.Warn().Str("configName", update.ConfigName).Msg("SSH proxy not found for status update")
-		return a, nil
-	}
-	proxy.UpdateSSHProxyStatus(update.Status)
-
-	// Forward to current page
-	item, ok := a.pages[a.currentPage]
-	if !ok {
-		return a, nil
-	}
-
-	updated, cmd := item.Update(event)
-	a.pages[a.currentPage] = updated
-	return a, cmd
-}
-
-// New creates and initializes a new TUI application model.
-func New() *appModel {
-	appState := types.NewAppState()
-	uiState := types.NewUIState()
-
-	welcomePage := welcome.New(appState, uiState)
-
-	ctx, cancel := context.WithCancel(context.Background())
-
-	model := &appModel{
-		currentPage:     messages.WelcomePageID,
-		appState:        appState,
-		uiState:         uiState,
-		status:          status.NewStatusCmp(),
-		loadedPages:     make(map[messages.PageID]bool),
-		keyMap:          DefaultKeyMap(),
-		events:          make(chan tea.Msg, 100),
-		eventsCtx:       ctx,
-		eventsCancel:    cancel,
-		serviceEventsWG: &sync.WaitGroup{},
-
-		pages: map[messages.PageID]util.Model{
-			messages.WelcomePageID:   welcomePage,
-			messages.SSHMesserPageID: ssh_messer.New(appState, uiState),
-		},
-	}
-
-	// 设置 SSH 状态更新订阅
-	model.setupSSHStatusSubscriber()
-
-	// 设置 Service Proxy 日志订阅
-	model.setupServiceProxyLogSubscriber()
-
-	return model
-}
-
-// Cleanup 清理资源
 func (a *appModel) Cleanup() {
-	// 清理屏幕内容
-	// 清除整个屏幕
-	fmt.Fprint(os.Stdout, "\033[2J")
-	// 将光标移动到左上角 (0,0)
-	fmt.Fprint(os.Stdout, "\033[H")
-	// 显示光标
-	fmt.Fprint(os.Stdout, "\033[?25h")
-	// 重置所有格式
-	fmt.Fprint(os.Stdout, "\033[0m")
 
-	if a.eventsCancel != nil {
-		a.eventsCancel()
+	// cancel context, this will trigger all subscribed channels to be closed
+	if a.EventsCancel != nil {
+		pkg.Logger.Info().Msg("[tui:Cleanup] Cancelling events context")
+		a.EventsCancel()
 	}
-	// 等待所有 goroutine 完成
-	a.serviceEventsWG.Wait()
+
+	// close all MesserHops brokers (ensure fully closed)
+	for configFileName, hops := range a.appState.MesserHops {
+		if hops != nil && hops.Broker != nil {
+			pkg.Logger.Info().Str("config", configFileName).Msg("[tui:Cleanup] Closing MesserHops broker")
+			hops.Broker.Shutdown()
+		}
+	}
+
+	// wait for subscribeMesserEvents goroutines to finish
+	if a.EventsCancelWG != nil {
+		a.EventsCancelWG.Wait()
+		pkg.Logger.Info().Msg("[tui:Cleanup] Events cancel wait group finished")
+	}
 }

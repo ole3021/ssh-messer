@@ -2,14 +2,14 @@ package pubsub
 
 import "context"
 
-const (
-	CreatedEvent EventType = "created"
-	UpdatedEvent EventType = "updated"
-	DeletedEvent EventType = "deleted"
-)
+// const (
+// 	CreatedEvent EventType = "created"
+// 	UpdatedEvent EventType = "updated"
+// 	DeletedEvent EventType = "deleted"
+// )
 
-type Subscriber[T any] interface {
-	Subscribe(context.Context) <-chan Event[T]
+type Subscriber[E any, T any] interface {
+	Subscribe(context.Context) <-chan Event[E, T]
 }
 
 type (
@@ -17,12 +17,12 @@ type (
 	EventType string
 
 	// Event represents an event in the lifecycle of a resource
-	Event[T any] struct {
-		Type    EventType
+	Event[E any, T any] struct {
+		Type    E
 		Payload T
 	}
 
-	Publisher[T any] interface {
-		Publish(EventType, T)
+	Publisher[E any, T any] interface {
+		Publish(E, T)
 	}
 )

@@ -22,8 +22,9 @@ type WelcomePage interface {
 }
 
 type welcomePage struct {
-	appState       *types.AppState
-	uiState        *types.UIState
+	appState *types.AppState
+	uiState  *types.UIState
+
 	compLogo       app_logo.AppLogoCmp
 	compConfigList config_list.ConfigListCmp
 }
@@ -33,7 +34,7 @@ func New(appState *types.AppState, uiState *types.UIState) WelcomePage {
 		appState:       appState,
 		uiState:        uiState,
 		compLogo:       app_logo.NewLogo(),
-		compConfigList: config_list.New(),
+		compConfigList: config_list.NewConfigListCmp(),
 	}
 }
 
@@ -49,24 +50,12 @@ func (p *welcomePage) Update(msg tea.Msg) (util.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-
+		// Components size managed by view model.
 		return p, tea.Batch(p.compLogo.SetSize(msg.Width, msg.Height/2-copyrightCompHeight),
 			p.compConfigList.SetSize(msg.Width, msg.Height/2))
 	}
 
-	updated, cmd := p.compLogo.Update(msg)
-	if updatedLogo, ok := updated.(app_logo.AppLogoCmp); ok {
-		p.compLogo = updatedLogo
-	}
-	cmds = append(cmds, cmd)
-
-	updated, cmd = p.compConfigList.Update(msg)
-	if updatedList, ok := updated.(config_list.ConfigListCmp); ok {
-		p.compConfigList = updatedList
-	}
-	cmds = append(cmds, cmd)
-
-	return p, tea.Batch(cmds...)
+	return p, tea.Batch(append(cmds, p.updateAllComponents(msg)...)...)
 }
 
 func (p *welcomePage) View() string {
@@ -99,4 +88,22 @@ func (p *welcomePage) View() string {
 		Height(p.uiState.Height).
 		Align(lipgloss.Center, lipgloss.Top).
 		Render(lipgloss.JoinVertical(lipgloss.Center, logoComponent, configListComponent, copyrightComponent))
+}
+
+func (p *welcomePage) updateAllComponents(msg tea.Msg) []tea.Cmd {
+	var cmds []tea.Cmd
+
+	updated, cmd := p.compLogo.Update(msg)
+	if updatedLogo, ok := updated.(app_logo.AppLogoCmp); ok {
+		p.compLogo = updatedLogo
+	}
+	cmds = append(cmds, cmd)
+
+	updated, cmd = p.compConfigList.Update(msg)
+	if updatedList, ok := updated.(config_list.ConfigListCmp); ok {
+		p.compConfigList = updatedList
+	}
+	cmds = append(cmds, cmd)
+
+	return cmds
 }
